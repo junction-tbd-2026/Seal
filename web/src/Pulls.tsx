@@ -8,19 +8,24 @@ import type { Pull, PullList } from "./types";
 /**
  * Where a pull request stands for the person signing:
  * "ready" to audit, "checking" while the AI check has no results yet,
- * "followup" once signed as rejected or sent for a full read, "done" once signed as accepted.
+ * "rework" once rejected, while the AI agent fixes the change and the AI checks it again,
+ * "followup" once sent for a full read by a person, "done" once accepted.
  *
  * The AI check runs by hand for now, so the page cannot tell a check that is running from one that
  * has not started: every pull request without results counts as "checking". A server that starts the
  * check when a pull request opens would report the real state.
  */
-export type Stage = "ready" | "checking" | "followup" | "done";
+export type Stage = "ready" | "checking" | "rework" | "followup" | "done";
 
 export function stageOf(pull: Pull): Stage {
   if (pull.status === "untested") return "checking";
   if (pull.status !== "signed") return "ready";
-  return pull.signed?.decision === "accept" ? "done" : "followup";
+  const decision = pull.signed?.decision;
+  return decision === "accept" ? "done" : decision === "reject" ? "rework" : "followup";
 }
+
+/** The AI is at work on these: they come back as "ready" by themselves, so the list keeps asking. */
+export const isWaitingOnAi = (pull: Pull) => stageOf(pull) === "checking" || stageOf(pull) === "rework";
 
 /** Only a pull request ready to audit opens. A signed one is closed for good. */
 export const canOpen = (pull: Pull) => stageOf(pull) === "ready";
@@ -31,7 +36,7 @@ const DECISION: Record<string, Decision> = {
   accept: { label: "Accepted", next: "", border: "border-caught/50", text: "text-caught", wash: "bg-caught-wash", dot: "bg-caught" },
   reject: {
     label: "Rejected",
-    next: "Back to the AI agent: it fixes the change, then the AI check runs again.",
+    next: "Back with the AI agent: it fixes the change, the AI checks it again, and it comes back here.",
     border: "border-missed",
     text: "text-missed",
     wash: "bg-missed-wash",
@@ -91,7 +96,8 @@ function statusOf(pull: Pull): { text: string; dot: string } {
 
 const CLOSED_TITLE: Record<Exclude<Stage, "ready">, string> = {
   checking: "The AI check of this pull request has not finished. It opens once the results are in.",
-  followup: "This pull request is signed. A sign-off cannot be changed.",
+  rework: "Rejected and back with the AI agent. It opens again once the AI has checked the fixed change.",
+  followup: "Sent for a full human read. A sign-off cannot be changed.",
   done: "This pull request is signed and accepted. A sign-off cannot be changed.",
 };
 
@@ -112,7 +118,7 @@ function PullRow({ pull, active, inMenu, onSelect }: { pull: Pull; active: boole
       className={`relative w-full rounded-lg px-3 py-2 text-left disabled:cursor-default ${active ? "bg-canvas" : "enabled:hover:bg-canvas"}`}
     >
       <span className={`flex items-start gap-2 ${stage === "ready" ? "" : "opacity-60"}`}>
-        {stage === "checking" ? (
+        {stage === "checking" || stage === "rework" ? (
           <span className="mt-[3px]">
             <Spinner size={14} />
           </span>
@@ -147,7 +153,8 @@ export function PullGroups({
   const groups: [string, Pull[]][] = [
     ["Waiting for your audit", pulls.pull_requests.filter((item) => stageOf(item) === "ready")],
     ["AI check running", pulls.pull_requests.filter((item) => stageOf(item) === "checking")],
-    ["Needs follow-up", pulls.pull_requests.filter((item) => stageOf(item) === "followup")],
+    ["Needs a full read", pulls.pull_requests.filter((item) => stageOf(item) === "followup")],
+    ["Back with the AI agent", pulls.pull_requests.filter((item) => stageOf(item) === "rework")],
     ["Accepted", pulls.pull_requests.filter((item) => stageOf(item) === "done")],
   ];
   return (
@@ -193,20 +200,11 @@ export function SpotNote({ pulls }: { pulls: PullList }) {
   );
 }
 
-function GitHubLink({ pull, strong }: { pull: Pull; strong?: boolean }) {
+/** Only a full read needs GitHub: that is where the person reads the whole change. */
+function GitHubLink({ pull }: { pull: Pull }) {
   return (
-    <a
-      href={pull.url}
-      target="_blank"
-      rel="noreferrer"
-      title={`Open pull request #${pull.number} on GitHub`}
-      className={
-        strong
-          ? "btn h-8 px-3 text-[13px]"
-          : "inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[13px] text-soft hover:bg-canvas hover:text-ink"
-      }
-    >
-      {strong ? "Read on GitHub" : "GitHub"}
+    <a href={pull.url} target="_blank" rel="noreferrer" title={`Open pull request #${pull.number} on GitHub`} className="btn h-8 px-3 text-[13px]">
+      Read on GitHub
       <ArrowUpRight size={14} />
     </a>
   );
@@ -218,7 +216,8 @@ function LandingRow({ pull, index, fresh, onOpen }: { pull: Pull; index: number;
   const status = statusOf(pull);
   const saved = savedAudit(pull);
   const decision = decisionOf(pull);
-  const quiet = stage === "checking" || stage === "done";
+  // Greyed while there is nothing for a person to do: the AI is at work, or it is done.
+  const quiet = stage === "checking" || stage === "rework" || stage === "done";
 
   const shell =
     stage === "ready"
@@ -227,7 +226,9 @@ function LandingRow({ pull, index, fresh, onOpen }: { pull: Pull; index: number;
         ? "cursor-progress border border-hair bg-panel/70"
         : stage === "followup"
           ? `border-[1.5px] bg-panel ${decision.border}`
-          : `border-[1.5px] bg-panel/60 ${decision.border}`;
+          : stage === "rework"
+            ? "cursor-progress border-[1.5px] border-missed/40 bg-panel/60"
+            : `border-[1.5px] bg-panel/60 ${decision.border}`;
 
   const body = (
     <>
@@ -262,9 +263,11 @@ function LandingRow({ pull, index, fresh, onOpen }: { pull: Pull; index: number;
           <span>
             {pull.author} · {plural(pull.files, "file")}
           </span>
-          {stage !== "followup" && pull.reviewers.length > 0 && <span className="truncate">{pull.reviewers.map(prettyModel).join(", ")}</span>}
+          {stage !== "followup" && stage !== "rework" && pull.reviewers.length > 0 && (
+            <span className="truncate">{pull.reviewers.map(prettyModel).join(", ")}</span>
+          )}
         </span>
-        {stage === "followup" && decision.next && <span className="mt-1 block text-[13px] text-ink">{decision.next}</span>}
+        {(stage === "followup" || stage === "rework") && decision.next && <span className="mt-1 block text-[13px] text-ink">{decision.next}</span>}
         {saved && (
           <span className="mt-2 block h-[3px] w-48 max-w-full overflow-hidden rounded-full bg-black/[0.08]" aria-hidden="true">
             <span className="block h-full rounded-full bg-done" style={{ width: `${Math.round((saved.done / saved.total) * 100)}%` }} />
@@ -282,24 +285,18 @@ function LandingRow({ pull, index, fresh, onOpen }: { pull: Pull; index: number;
         <ArrowRight size={15} className="transition-transform group-hover:translate-x-0.5" />
       </span>
     );
-  } else if (stage === "checking") {
+  } else if (stage === "checking" || stage === "rework") {
     action = (
       <span className="inline-flex items-center gap-2 text-[13px] text-soft">
         <Spinner size={18} />
         <span className="hidden sm:inline">AI check running</span>
       </span>
     );
-  } else if (pull.signed?.decision === "full_read") {
-    action = <GitHubLink pull={pull} strong />;
   } else if (stage === "followup") {
-    action = (
-      <span className="flex items-center gap-1">
-        <span className={`inline-flex h-6 items-center rounded-md px-2 text-[12.5px] font-medium ${decision.wash} ${decision.text}`}>Back to the AI agent</span>
-        <GitHubLink pull={pull} />
-      </span>
-    );
-  } else {
     action = <GitHubLink pull={pull} />;
+  } else {
+    // Accepted: done, nothing left to do.
+    action = null;
   }
 
   const row = "group relative flex w-full items-center gap-4 rounded-xl px-4 py-3.5 text-left transition-[box-shadow,border-color,transform,background-color] duration-150";
@@ -367,7 +364,11 @@ export function Landing({ pulls, justSigned, onOpen }: { pulls: PullList; justSi
     ...all.filter((pull) => placed(pull) === "ready").sort(byNumber),
     ...all.filter((pull) => placed(pull) === "checking").sort(byNumber),
   ];
-  const followup = all.filter((pull) => placed(pull) === "followup").sort(bySignedAt);
+  // What a person must act on first, then what is back with the AI agent.
+  const followup = [
+    ...all.filter((pull) => placed(pull) === "followup").sort(bySignedAt),
+    ...all.filter((pull) => placed(pull) === "rework").sort(bySignedAt),
+  ];
   const done = all.filter((pull) => placed(pull) === "done").sort(bySignedAt);
   const checking = all.filter((pull) => stageOf(pull) === "checking").length;
   const ready = waiting.length - checking;
@@ -399,7 +400,7 @@ export function Landing({ pulls, justSigned, onOpen }: { pulls: PullList; justSi
             )}
           </Section>
           {followup.length > 0 && (
-            <Section title="Needs follow-up" hint="Rejected, or sent for a full human read">
+            <Section title="Needs follow-up" hint="Sent for a full human read, or rejected and back with the AI agent">
               {rows(followup)}
             </Section>
           )}

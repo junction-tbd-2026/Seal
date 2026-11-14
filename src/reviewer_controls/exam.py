@@ -222,6 +222,30 @@ def list_changes(results_dir: Path) -> List[Dict[str, Any]]:
     return list(seen.values())
 
 
+def _moment(stamp: Any) -> Optional[datetime]:
+    """A saved timestamp ("2026-11-14T05:49:36Z") as a time, or None when it cannot be read."""
+    try:
+        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def standing_signoffs(signoffs: List[Dict[str, Any]], run_created_at: Any) -> List[Dict[str, Any]]:
+    """The sign-offs that still stand for the newest run of a change.
+
+    A rejection sends the change back to the AI agent. A run saved after the rejection means the
+    change came back and the AI checked it again, so the rejection no longer closes the pull
+    request; it stays in the log. An acceptance or a request for a full read is final.
+    """
+    run = _moment(run_created_at)
+
+    def superseded(entry: Dict[str, Any]) -> bool:
+        signed = _moment(entry.get("signed_at"))
+        return entry.get("decision") == "reject" and run is not None and signed is not None and run > signed
+
+    return [entry for entry in signoffs if not superseded(entry)]
+
+
 def build_exam(results_dir: Path, change_id: str) -> Optional[Dict[str, Any]]:
     """The newest set of planted variants for a change, with every reviewer that was tested on it."""
     runs = [run for run in load_runs(results_dir) if run["change"]["id"] == change_id]
@@ -263,7 +287,7 @@ def build_exam(results_dir: Path, change_id: str) -> Optional[Dict[str, Any]]:
             for p in newest["plants"]
         ],
         "reviewers": [_reviewer_view(run) for run in sorted(by_reviewer.values(), key=lambda r: r.get("created_at", ""))],
-        "signoffs": signoffs_for(results_dir, change_id),
+        "signoffs": standing_signoffs(signoffs_for(results_dir, change_id), newest.get("created_at")),
     }
 
 

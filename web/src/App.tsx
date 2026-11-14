@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ArrowLeft, ArrowUpRight, BotIcon, CheckIcon, ChevronDown, PanelIcon, PullIcon, XIcon } from "./icons";
 import { fetchPulls, fetchReview, postSignOff, prettyModel } from "./lib";
 import { clearSaved, codeFingerprint, storageKey } from "./progress";
-import { Landing, PullGroups, SpotNote, canOpen, stageOf } from "./Pulls";
+import { Landing, PullGroups, SpotNote, canOpen, isWaitingOnAi } from "./Pulls";
 import { SpotCheckReveal } from "./SpotCheck";
 import type { Exam, PullList, SignOff, SignResult, SpotVerdict } from "./types";
 import { Workspace } from "./Workspace";
@@ -118,8 +118,9 @@ export default function App() {
     void loadPulls();
   }, [loadPulls]);
 
-  // While an AI check is running, ask again now and then, so the pull request opens up once its results are in.
-  const checking = pulls?.pull_requests.some((item) => stageOf(item) === "checking") ?? false;
+  // While the AI is at work on a pull request (a first check, or a rejected change being fixed and checked again),
+  // ask again now and then, so it opens up once its results are in.
+  const checking = pulls?.pull_requests.some(isWaitingOnAi) ?? false;
   useEffect(() => {
     if (!checking) return;
     const timer = window.setInterval(() => void loadPulls(), POLL_MS);

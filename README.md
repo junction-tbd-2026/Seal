@@ -69,9 +69,11 @@ A working prototype with two parts.
 - The list has three parts. At the top, the pull requests the AI has
   checked and a person can audit, and below them any whose AI check is
   still running (a spinner; they cannot be opened yet). Then what needs
-  follow-up: a rejected pull request goes back to the AI agent to be fixed
-  and checked again, and one sent for a full human read links to GitHub. At
-  the bottom, an archive of the accepted ones, with who signed and when.
+  follow-up: one sent for a full human read links to GitHub, where a person
+  reads the whole change; a rejected one is back with the AI agent, greyed
+  with a spinner, and returns to the top by itself once a newer AI run is
+  saved for it. At the bottom, an archive of the accepted ones, with who
+  signed and when.
 - After the sign-off the page goes back to the list and the signed pull
   request moves to its part. A signed pull request cannot be opened again.
 - Each objective step states three things in the side bar: what the AI
@@ -149,7 +151,9 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
    and post its status back to it. Until then the page cannot tell a check
    that is running from one that never started: every pull request without
    results shows as "AI check running", and the list asks again every few
-   seconds so it opens once results arrive.
+   seconds so it opens once results arrive. A rejected pull request works
+   the same way: it reopens when a newer run is saved, but nothing starts
+   that run yet.
 4. **Keep a track record.** Pool results per reviewer, per code area and per
    kind of defect, so the amount of human review follows measured trust.
 5. **Submission.** Product name, two-minute video, public repository, and

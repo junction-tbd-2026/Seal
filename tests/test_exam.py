@@ -133,6 +133,30 @@ class ExamTests(unittest.TestCase):
         self.assertEqual((again["status"], again["signed"]["name"]), ("signed", "Ada"))
         self.assertEqual(list_pulls(self.results / "missing.json", self.results)["pull_requests"], [])
 
+    def test_a_rejection_lasts_until_the_ai_checks_the_change_again(self):
+        pulls_file = self.results / "pulls.json"
+        pulls_file.write_text(json.dumps({
+            "repository": "me/repo", "repository_url": "https://example.invalid/me/repo",
+            "pull_requests": [{"number": 1, "change_id": "ju26-issue-1", "requirement_id": "1", "title": "t1"}],
+        }))
+        self.save("a.json", run("big", "2026-11-14T03:00:00Z", self.plants, {"p01"}))
+        record_signoff(self.results, "ju26-issue-1", "big", "Ada", "reject")
+        self.assertEqual(list_pulls(pulls_file, self.results)["pull_requests"][0]["status"], "signed")
+
+        # The AI agent fixed the change and the AI check ran again: it is open for audit once more.
+        self.save("b.json", run("big", "2099-01-01T00:00:00Z", self.plants, {"p01"}))
+        reopened = list_pulls(pulls_file, self.results)["pull_requests"][0]
+        self.assertEqual((reopened["status"], reopened["signed"]), ("needs_you", None))
+        self.assertEqual(build_exam(self.results, "ju26-issue-1")["signoffs"], [])
+        # The rejection stays in the log.
+        self.assertEqual([e["decision"] for e in signoffs_for(self.results, "ju26-issue-1")], ["reject"])
+
+        # An acceptance is final, even with a newer run.
+        record_signoff(self.results, "ju26-issue-1", "big", "Grace", "accept")
+        self.save("c.json", run("big", "2099-06-01T00:00:00Z", self.plants, {"p01"}))
+        closed = list_pulls(pulls_file, self.results)["pull_requests"][0]
+        self.assertEqual((closed["status"], closed["signed"]["name"]), ("signed", "Grace"))
+
     def test_signoffs_are_appended_and_validated(self):
         with self.assertRaises(ValueError):
             record_signoff(self.results, "c", "r", "   ", "accept")
