@@ -11,7 +11,8 @@ export function SpotCheckReveal({ result, name, onContinue }: { result: Reveal; 
   const button = useRef<HTMLButtonElement>(null);
   useEffect(() => button.current?.focus(), []);
 
-  const { plant, caught, spotted, seconds } = result;
+  const { plant, spotted, seconds } = result;
+  const refused = result.refused ?? result.caught;
   const time = seconds < 90 ? `${Math.round(seconds)} seconds` : `${Math.round(seconds / 60)} minutes`;
 
   return (
@@ -22,10 +23,10 @@ export function SpotCheckReveal({ result, name, onContinue }: { result: Reveal; 
         transition={{ type: "spring", stiffness: 260, damping: 20 }}
         className="w-full max-w-2xl overflow-hidden rounded-xl border-[3px] border-ink bg-panel shadow-[8px_8px_0_var(--color-ink)]"
       >
-        <div className={`border-b-[3px] border-ink px-6 py-5 ${spotted ? "bg-caught text-white" : caught ? "bg-warn text-ink" : "bg-missed text-white"}`}>
-          <p className="text-[11px] font-bold uppercase tracking-[0.14em] opacity-90">That was a spot-check</p>
+        <div className={`border-b-[3px] border-ink px-6 py-5 ${spotted ? "bg-caught text-white" : refused ? "bg-warn text-ink" : "bg-missed text-white"}`}>
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em] opacity-90">That was the agreed spot-check drill</p>
           <h2 id="spot-title" className="mt-1 text-[30px] font-extrabold leading-[1.05] tracking-tight">
-            {spotted ? "You found the planted bug." : caught ? "You refused it, but missed where." : "You just approved a planted bug."}
+            {spotted ? "You found the planted bug." : refused ? "You held it back, but did not find the bug." : "You just approved a planted bug."}
           </h2>
         </div>
 
@@ -36,10 +37,10 @@ export function SpotCheckReveal({ result, name, onContinue }: { result: Reveal; 
                 {name}, the code you were shown was a copy with a mistake we planted, and you marked that exact spot as wrong, after {time}.
                 That is what a sign-off is supposed to mean.
               </>
-            ) : caught ? (
+            ) : refused ? (
               <>
                 {name}, the code you were shown was a copy with a mistake we planted. You did not accept it, after {time}, but you did not
-                mark the planted spot as wrong.
+                mark the planted spot as wrong, so it does not count as caught: holding everything back is not the same as finding the problem.
               </>
             ) : (
               <>

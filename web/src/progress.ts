@@ -1,5 +1,5 @@
 import { sameFile } from "./lib";
-import type { EvidenceRef, Exam, FileDiff, Finding, Plant, PointView, Reviewer, Row, SignOff, SpotVerdict } from "./types";
+import type { ApprovedObjective, EvidenceRef, Exam, FileDiff, Finding, Plant, PointView, Reviewer, Row, SignOff, SpotVerdict } from "./types";
 
 /**
  * The review as a list of steps, and what one person has checked so far.
@@ -10,7 +10,7 @@ import type { EvidenceRef, Exam, FileDiff, Finding, Plant, PointView, Reviewer, 
  * person has not seen.
  */
 
-export type PointAnswer = "met" | "not_met";
+export type PointAnswer = "met" | "not_met" | "cannot_tell";
 export type FindingAnswer = "real" | "not_real";
 
 export type Progress = {
@@ -30,12 +30,63 @@ export type Progress = {
   savedAt: string;
 };
 
-const PREFIX = "reviewer-controls:review:v1:";
+const PREFIX = "reviewer-controls:review:v2:";
 
-export const storageKey = (changeId: string, reviewerName: string) => `${PREFIX}${changeId}:${reviewerName}`;
+/** Checks belong to one person: two people on the same machine never share them. */
+export const storageKey = (changeId: string, reviewerName: string, signer: string) =>
+  `${PREFIX}${changeId}:${reviewerName}:${signer.trim().toLowerCase()}`;
+
+/** Every saved review of one change, whoever made it. */
+export function clearChange(changeId: string): void {
+  try {
+    const doomed: string[] = [];
+    for (let index = 0; index < window.localStorage.length; index++) {
+      const key = window.localStorage.key(index);
+      if (key && key.startsWith(`${PREFIX}${changeId}:`)) doomed.push(key);
+    }
+    doomed.forEach((key) => window.localStorage.removeItem(key));
+  } catch {
+    // Nothing to clear.
+  }
+}
+
+/** The most progress anyone saved on this change in this browser, for the list of pull requests. */
+export function savedSummary(changeId: string): { done: number; total: number } | null {
+  try {
+    let best: { done: number; total: number } | null = null;
+    for (let index = 0; index < window.localStorage.length; index++) {
+      const key = window.localStorage.key(index);
+      if (!key || !key.startsWith(`${PREFIX}${changeId}:`)) continue;
+      const saved = readSaved(key);
+      if (saved && saved.total > 0 && (!best || saved.done > best.done)) best = { done: saved.done, total: saved.total };
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
+const SIGNER_KEY = "reviewer-controls:signer";
+
+/** The name of the person reviewing in this browser tab. Kept per tab, so the next person starts fresh. */
+export function readSigner(): string {
+  try {
+    return window.sessionStorage.getItem(SIGNER_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function writeSigner(name: string): void {
+  try {
+    window.sessionStorage.setItem(SIGNER_KEY, name);
+  } catch {
+    // The name just has to be typed again next time.
+  }
+}
 
 export function freshProgress(runFile: string, code: string): Progress {
-  return { runFile, code, step: "intro", intro: false, points: {}, spots: {}, findings: {}, done: 0, total: 0, savedAt: "" };
+  return { runFile, code, step: "objectives", intro: false, points: {}, spots: {}, findings: {}, done: 0, total: 0, savedAt: "" };
 }
 
 /** True while nothing has been checked, so there is nothing worth keeping. */
@@ -65,7 +116,7 @@ export function readSaved(key: string): Progress | null {
     return {
       runFile: saved.runFile,
       code: saved.code,
-      step: typeof saved.step === "string" ? saved.step : "intro",
+      step: typeof saved.step === "string" ? saved.step : "objectives",
       intro: saved.intro === true,
       points: saved.points,
       spots: saved.spots,
@@ -96,12 +147,13 @@ export function clearSaved(key: string): void {
 }
 
 /**
- * The saved checks for this review, if they were made on this code and this reviewer run.
- * `stale` says older checks existed and no longer apply.
+ * The saved checks for this review, if they were made on this reviewer run.
+ * `stale` says older checks existed and no longer apply. The code on screen is deliberately not
+ * compared: it differs only when a spot-check copy is shown, and saying so would give the test away.
  */
-export function openProgress(key: string, runFile: string, code: string): { progress: Progress; stale: boolean } {
-  const saved = readSaved(key);
-  if (saved && saved.runFile === runFile && saved.code === code) return { progress: saved, stale: false };
+export function openProgress(key: string | null, runFile: string, code: string): { progress: Progress; stale: boolean } {
+  const saved = key ? readSaved(key) : null;
+  if (saved && saved.runFile === runFile) return { progress: { ...saved, code }, stale: false };
   return { progress: freshProgress(runFile, code), stale: saved != null && !isBlank(saved) };
 }
 
@@ -145,11 +197,37 @@ export type PointStep = {
 };
 
 export type Step =
+  | { id: "objectives"; kind: "objectives" }
   | { id: "intro"; kind: "intro" }
+  | { id: "proven"; kind: "proven"; points: PointView[] }
   | PointStep
+  | { id: string; kind: "added"; objective: ApprovedObjective }
   | { id: "spots"; kind: "spots"; spots: Plant[] }
   | { id: "findings"; kind: "findings"; findings: Finding[] }
   | { id: "sign"; kind: "sign" };
+
+/** The objectives this review answers: the owner's kept ones, or every point the reviewer judged. */
+export function keptIds(exam: Exam, reviewer: Reviewer): string[] {
+  if (exam.approval) return exam.approval.objectives.filter((item) => item.decision === "keep").map((item) => item.id);
+  return reviewer.points.map((point) => point.id);
+}
+
+/** One line on where this change stands: objectives, how many the test proved, how many are left for a person. */
+export function summaryLine(exam: Exam, reviewer: Reviewer): { objectives: number; proven: number; forYou: number; approved: boolean } {
+  const kept = new Set(keptIds(exam, reviewer));
+  const proven = reviewer.points.filter((point) => kept.has(point.id) && point.proven).length;
+  return { objectives: kept.size, proven, forYou: kept.size - proven, approved: exam.approval != null };
+}
+
+/** What the reviewer's verdict is on the approved objectives only. */
+export function verdictOnApproved(exam: Exam, reviewer: Reviewer): "meets" | "not_met" | "unclear" | null {
+  if (!exam.approval) return null;
+  const kept = new Set(keptIds(exam, reviewer));
+  const judged = reviewer.points.filter((point) => kept.has(point.id));
+  if (judged.some((point) => point.status === "not_met")) return "not_met";
+  if (judged.length > 0 && judged.every((point) => point.status === "met") && judged.length === kept.size) return "meets";
+  return "unclear";
+}
 
 /** How far the reviewer's answer on one point can be believed, and what that asks of the person. */
 function describePoint(point: PointView, spots: Plant[]): { tone: Tone; chip: string; why: string; todo: string } {
@@ -200,12 +278,25 @@ function describePoint(point: PointView, spots: Plant[]): { tone: Tone; chip: st
       todo: "Read the lines and decide yourself.",
     };
   }
-  if (point.noticed === "yes") {
+  if (point.proven) {
     return {
       tone: "verified",
-      chip: "Held up",
-      why: `The reviewer says this is met, and it noticed ${point.broken_total === 1 ? "the break" : `all ${point.broken_total} breaks`} we planted in the lines it cites.`,
-      todo: "Read the lines and confirm.",
+      chip: "Proven",
+      why: `The reviewer says this is met. When we broke the lines it cites, it took back "met" every time (${point.broken_total} of ${point.broken_total}), and it stayed quiet on ${point.harmless_near === 1 ? "the harmless edit" : `all ${point.harmless_near} harmless edits`} there.`,
+      todo: "No reading needed.",
+    };
+  }
+  if (point.noticed === "yes") {
+    const gaps = [
+      point.broken_total < 2 ? `only ${point.broken_total === 1 ? "one break was" : `${point.broken_total} breaks were`} planted here` : null,
+      (point.broken_withdrew ?? 0) < point.broken_total ? "it flagged the line but still called the point met" : null,
+      !point.harmless_near ? "no harmless edit was tested here" : (point.harmless_near_alarms ?? 0) > 0 ? "it also raised the alarm on a harmless edit here" : null,
+    ].filter(Boolean);
+    return {
+      tone: "unproven",
+      chip: `Noticed ${point.broken_noticed} of ${point.broken_total}, not proven`,
+      why: `The reviewer says this is met and reacted to every break we planted in the lines it cites, but ${gaps.join("; ") || "the test was too small"}.`,
+      todo: "Read the lines and decide yourself.",
     };
   }
   return {
@@ -218,18 +309,35 @@ function describePoint(point: PointView, spots: Plant[]): { tone: Tone; chip: st
   };
 }
 
-/** The review as steps: the reviewer's test, each requirement point, anything left over, then the sign-off. */
+/**
+ * The review as steps, in the order of three questions: what does done mean (the owner's objectives),
+ * can the AI be believed (the reviewer's test), and what is left for a person (everything the test did not
+ * prove, the reviewer's findings, then the sign-off). Proven objectives share one step: trust earned is
+ * reading saved.
+ */
 export function buildSteps(exam: Exam, reviewer: Reviewer): Step[] {
   const plants = new Map(exam.plants.map((plant) => [plant.id, plant]));
   const blind = reviewer.read_yourself.map((id) => plants.get(id)).filter((plant): plant is Plant => Boolean(plant));
-  const pointIds = new Set(reviewer.points.map((point) => point.id));
+  const kept = new Set(keptIds(exam, reviewer));
+  const points = reviewer.points.filter((point) => kept.has(point.id));
 
-  const steps: Step[] = [{ id: "intro", kind: "intro" }];
-  for (const point of reviewer.points) {
-    const spots = blind.filter((plant) => plant.breaks === point.id);
+  const steps: Step[] = [
+    { id: "objectives", kind: "objectives" },
+    { id: "intro", kind: "intro" },
+  ];
+  const proven = points.filter((point) => point.proven);
+  if (proven.length > 0) steps.push({ id: "proven", kind: "proven", points: proven });
+  const attached = new Set<string>();
+  for (const point of points.filter((item) => !item.proven)) {
+    // A blind spot belongs to a point only when the break sat in lines this reviewer cited for it.
+    const spots = blind.filter((plant) => point.missed_plants.includes(plant.id));
+    spots.forEach((plant) => attached.add(plant.id));
     steps.push({ id: `point:${point.id}`, kind: "point", point, spots, ...describePoint(point, spots) });
   }
-  const loose = blind.filter((plant) => !plant.breaks || !pointIds.has(plant.breaks));
+  for (const objective of exam.approval?.objectives.filter((item) => item.added && item.decision === "keep") ?? []) {
+    steps.push({ id: `added:${objective.id}`, kind: "added", objective });
+  }
+  const loose = blind.filter((plant) => !attached.has(plant.id));
   if (loose.length > 0) steps.push({ id: "spots", kind: "spots", spots: loose });
   if (reviewer.findings.length > 0) steps.push({ id: "findings", kind: "findings", findings: reviewer.findings });
   steps.push({ id: "sign", kind: "sign" });
@@ -257,21 +365,30 @@ function spotsState(spots: Plant[], progress: Progress): { left: number; wrong: 
   };
 }
 
-export function stepState(step: Step, progress: Progress, signed: SignOff | null): StepState {
+const ANSWER_TEXT: Record<PointAnswer, string> = { met: "You say it is met", not_met: "You say it is not met", cannot_tell: "You can't tell: risk you accept" };
+
+export function stepState(step: Step, progress: Progress, signed: SignOff | null, exam?: Exam): StepState {
   switch (step.kind) {
+    case "objectives":
+      return {
+        done: exam?.approval != null,
+        flagged: false,
+        answer: exam?.approval ? `Approved by ${exam.approval.name}` : null,
+      };
     case "intro":
-      return { done: progress.intro, flagged: false, answer: progress.intro ? "Read" : null };
+      return { done: progress.intro, flagged: false, answer: progress.intro ? "Seen" : null };
+    case "proven": {
+      const accepted = step.points.every((point) => progress.points[point.id] === "met");
+      return { done: accepted, flagged: false, answer: accepted ? "Accepted as proven" : null };
+    }
+    case "added": {
+      const answer = progress.points[step.objective.id];
+      return { done: answer != null, flagged: answer === "not_met", answer: answer ? ANSWER_TEXT[answer] : null };
+    }
     case "point": {
       const { left, wrong } = spotsState(step.spots, progress);
       const answer = progress.points[step.point.id];
-      const said =
-        answer === "met"
-          ? step.tone === "verified"
-            ? "You confirmed it is met"
-            : "You say it is met"
-          : answer === "not_met"
-            ? "You say it is not met"
-            : null;
+      const said = answer ? ANSWER_TEXT[answer] : null;
       const spotNote = wrong > 0 ? `${wrong} ${wrong === 1 ? "spot looks" : "spots look"} wrong` : null;
       return {
         done: left === 0 && answer != null,
@@ -313,8 +430,17 @@ export function stepState(step: Step, progress: Progress, signed: SignOff | null
 /** What a step is called in the list and in its header. */
 export function stepLabel(step: Step): { eyebrow: string; title: string } {
   switch (step.kind) {
+    case "objectives":
+      return { eyebrow: "The owner", title: "What does done mean?" };
     case "intro":
-      return { eyebrow: "Before you start", title: "How much is the AI reviewer's opinion worth?" };
+      return { eyebrow: "Before you start", title: "Can the AI reviewer be believed on this change?" };
+    case "proven":
+      return {
+        eyebrow: "Proven by our test",
+        title: `${step.points.length === 1 ? "One objective" : `${step.points.length} objectives`} the AI's answer held up on`,
+      };
+    case "added":
+      return { eyebrow: `Added by the owner · ${step.objective.id}`, title: step.objective.text };
     case "point":
       return { eyebrow: `Requirement ${step.point.id}`, title: step.point.text };
     case "spots":

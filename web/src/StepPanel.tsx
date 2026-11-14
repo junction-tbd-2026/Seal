@@ -1,7 +1,7 @@
 import { DiffView, type Mark } from "./DiffView";
 import { fileName, lineRange } from "./lib";
 import { excerptRows, findFile, pointCards, type FindingAnswer, type PointStep, type Progress } from "./progress";
-import type { FileDiff, Finding, Plant, SpotVerdict } from "./types";
+import type { FileDiff, Finding, Plant, PointView, SpotVerdict } from "./types";
 
 /** Two answers side by side. Pressing the chosen one again takes it back. */
 export function Choice<T extends string>({
@@ -233,6 +233,55 @@ export function FindingsBody({
           }
         />
       ))}
+    </Scroller>
+  );
+}
+
+/** Objectives the test proved: listed once, with what proved them. No reading asked for. */
+export function ProvenBody({ points, onOpen }: { points: PointView[]; onOpen: (path: string, line: number) => void }) {
+  return (
+    <Scroller>
+      {points.map((point) => (
+        <article key={point.id} className="max-w-3xl rounded-lg border-2 border-ink bg-panel px-5 py-4">
+          <p className="text-[14.5px] font-bold leading-snug">
+            <span className="mr-2 font-mono text-[12.5px] text-faint">{point.id}</span>
+            {point.text}
+          </p>
+          <p className="mt-1.5 text-[13px] leading-snug text-soft">
+            Broke the cited lines {point.broken_total} times: it took back "met" every time. Harmless edits there: {point.harmless_near}, no false alarm.
+          </p>
+          <p className="mt-2 flex flex-wrap gap-1.5">
+            {point.evidence.map((ref, index) => (
+              <button
+                key={index}
+                type="button"
+                onClick={() => onOpen(ref.file, ref.line_start)}
+                className="rounded border border-hair bg-canvas px-1.5 py-px font-mono text-[11.5px] font-bold hover:border-ink"
+              >
+                {fileName(ref.file)}:{lineRange(ref.line_start, ref.line_end)}
+              </button>
+            ))}
+          </p>
+        </article>
+      ))}
+    </Scroller>
+  );
+}
+
+/** An objective the owner added. The AI never saw it, so there are no lines to point to. */
+export function AddedBody({ onWholeChange }: { onWholeChange: () => void }) {
+  return (
+    <Scroller>
+      <div className="max-w-xl rounded-lg border-2 border-ink bg-panel px-5 py-5">
+        <p className="text-[15px] font-bold">Nothing tested this objective</p>
+        <p className="mt-1 text-[13.5px] leading-snug text-soft">
+          It was added after the AI review, so neither the reviewer nor our test looked at it. If the answer depends on running the code, say you can't tell: it then
+          appears on the sign-off as risk you accept.
+        </p>
+        <button type="button" onClick={onWholeChange} className="press mt-4 rounded-md bg-warn px-3.5 py-1.5 text-[13.5px] font-bold">
+          Read the whole change
+        </button>
+      </div>
     </Scroller>
   );
 }

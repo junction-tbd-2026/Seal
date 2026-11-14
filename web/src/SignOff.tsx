@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { formatWhen } from "./lib";
-import { decisionText, stepLabel, type Step, type StepState } from "./progress";
-import type { SignOff } from "./types";
+import { decisionText, keptIds, stepLabel, type Progress, type Step, type StepState } from "./progress";
+import type { Exam, Reviewer, SignOff } from "./types";
 
 const DECISIONS = [
   { value: "accept", label: "Accept", style: "bg-caught text-white" },
@@ -36,13 +36,80 @@ function StepRow({ step, state, onGoTo }: { step: Step; state: StepState; onGoTo
  * the steps still open, or what they marked wrong. What is already done is folded away.
  * Accept needs every earlier step done and nothing marked wrong. Reject and full read are always open.
  */
+/** What the person signs: what was proven, what they decided, what nobody could decide, and what nothing checked. */
+function Receipt({ exam, reviewer, progress }: { exam: Exam; reviewer: Reviewer; progress: Progress }) {
+  const kept = keptIds(exam, reviewer);
+  const text = (id: string) =>
+    exam.approval?.objectives.find((item) => item.id === id)?.text ?? reviewer.points.find((point) => point.id === id)?.text ?? id;
+  const proven = reviewer.points.filter((point) => kept.includes(point.id) && point.proven).map((point) => point.id);
+  const decided = kept.filter((id) => !proven.includes(id) && progress.points[id] === "met");
+  const unsure = kept.filter((id) => progress.points[id] === "cannot_tell");
+  const struck = exam.approval?.objectives.filter((item) => item.decision === "strike") ?? [];
+  const untested = exam.changed_lines != null && exam.planted_lines != null ? exam.changed_lines - exam.planted_lines : null;
+  const row = (label: string, ids: string[], tone: string) =>
+    ids.length > 0 && (
+      <div>
+        <p className={`text-[12px] font-bold uppercase tracking-wide ${tone}`}>{label}</p>
+        <ul className="mt-0.5 space-y-0.5">
+          {ids.map((id) => (
+            <li key={id} className="truncate text-[13px]" title={text(id)}>
+              <span className="mr-1.5 font-mono text-[11.5px] font-bold text-faint">{id}</span>
+              {text(id)}
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  return (
+    <section className="space-y-3 rounded-lg border-2 border-ink bg-panel px-5 py-4">
+      <h3 className="text-[15px] font-bold">What you are signing</h3>
+      {row("Proven by our test", proven, "text-caught")}
+      {row("Checked by you", decided, "text-ink")}
+      {row("Nobody could decide: risk you accept", unsure, "text-missed")}
+      <div>
+        <p className="text-[12px] font-bold uppercase tracking-wide text-soft">Not checked by anything</p>
+        <ul className="mt-0.5 list-disc space-y-0.5 pl-4 text-[13px]">
+          {untested != null && untested > 0 && (
+            <li>
+              {untested} of {exam.changed_lines} changed lines had no planted edit, so the reviewer's silence there is untested.
+            </li>
+          )}
+          {!exam.build_checked && <li>Nothing was compiled or run.</li>}
+          <li>Design choices, and anything outside this change.</li>
+          {struck.map((item) => (
+            <li key={item.id}>
+              {item.id}, struck by {exam.approval?.name} as out of scope: {item.text}
+            </li>
+          ))}
+        </ul>
+      </div>
+      {exam.approval ? (
+        <p className="text-[12px] text-soft">
+          Objectives approved by {exam.approval.name}, {formatWhen(exam.approval.approved_at)}.
+        </p>
+      ) : (
+        <p className="text-[12px] font-bold text-missed">The objectives have not been approved by an owner, so this cannot be accepted yet.</p>
+      )}
+    </section>
+  );
+}
+
 export function SignOffStep({
+  exam,
+  reviewer,
+  progress,
+  signer,
   steps,
   states,
   mine,
   onGoTo,
   onSign,
 }: {
+  exam: Exam;
+  reviewer: Reviewer;
+  progress: Progress;
+  /** The person reviewing, if they gave their name. */
+  signer: string;
   /** Every step before this one, with its state at the same index. */
   steps: Step[];
   states: StepState[];
@@ -51,7 +118,7 @@ export function SignOffStep({
   onGoTo: (stepId: string) => void;
   onSign: (name: string, decision: string) => Promise<void>;
 }) {
-  const [name, setName] = useState("");
+  const [name, setName] = useState(signer);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,7 +126,7 @@ export function SignOffStep({
   const open = rows.filter((row) => !row.state.done);
   const flagged = rows.filter((row) => row.state.flagged);
   const finished = rows.filter((row) => row.state.done && !row.state.flagged);
-  const blocked = open.length > 0 || flagged.length > 0;
+  const blocked = open.length > 0 || flagged.length > 0 || !exam.approval;
 
   const sign = async (decision: string) => {
     setBusy(true);
@@ -87,12 +154,16 @@ export function SignOffStep({
           </ul>
         )}
 
+        <Receipt exam={exam} reviewer={reviewer} progress={progress} />
+
         {blocked && (
           <section className="rounded-lg border-2 border-ink bg-panel px-5 py-4">
             <h3 className="text-[15px] font-bold">
               {flagged.length > 0
                 ? "You marked something as wrong, so this cannot be accepted"
-                : `${open.length === 1 ? "One step is" : `${open.length} steps are`} left before you can accept`}
+                : open.length > 0
+                  ? `${open.length === 1 ? "One step is" : `${open.length} steps are`} left before you can accept`
+                  : "The owner has not approved the objectives yet"}
             </h3>
             <ul className="-mx-2 mt-2">
               {(flagged.length > 0 ? flagged : open).map((row) => (
@@ -104,7 +175,7 @@ export function SignOffStep({
 
         <section className="rounded-lg border-2 border-ink bg-panel px-5 py-5 shadow-[var(--shadow-hard)]">
           <label htmlFor="signer" className="text-[15px] font-bold">
-            {blocked ? "Or decide now" : "Everything is checked. Your decision?"}
+            {blocked ? "Or decide now" : "Your decision, on the receipt above"}
           </label>
           <input
             id="signer"

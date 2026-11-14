@@ -1,7 +1,8 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useState } from "react";
 import { DiffView } from "./DiffView";
-import { KIND_LABEL, KIND_MEANING, RESULT_LABEL, RESULT_MEANING, prettyModel } from "./lib";
+import { JUDGEMENT, KIND_LABEL, KIND_MEANING, RESULT_LABEL, RESULT_MEANING, prettyModel } from "./lib";
+import { verdictOnApproved } from "./progress";
 import type { Exam, Reviewer, Result } from "./types";
 
 const SQUARE: Record<Result, string> = {
@@ -50,7 +51,20 @@ function Fold({ title, children }: { title: string; children: React.ReactNode })
  * The first step: what the AI reviewer said about the real code, and how it did when we
  * tested it on copies with planted mistakes. Two facts up front; the rest is folded away.
  */
-export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewer }) {
+export function ReviewerTest({
+  exam,
+  reviewer,
+  signer,
+  nameDraft,
+  onNameDraft,
+}: {
+  exam: Exam;
+  reviewer: Reviewer;
+  /** The person reviewing; empty until they type their name. */
+  signer: string;
+  nameDraft: string;
+  onNameDraft: (name: string) => void;
+}) {
   const reduced = useReducedMotion() ?? false;
   const [revealed, setRevealed] = useState(exam.plants.length);
   const [picked, setPicked] = useState<string | null>(null);
@@ -66,6 +80,9 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
   const done = revealed >= exam.plants.length;
   const { counts } = reviewer;
   const problems = reviewer.findings.length;
+  const judgement = JUDGEMENT[reviewer.judgement ?? "untested"];
+  const onApproved = verdictOnApproved(exam, reviewer);
+  const others = exam.reviewers.filter((item) => item.name !== reviewer.name);
 
   const verdict = reviewer.review_failed
     ? { text: "No usable answer", tone: "bg-warn-wash" }
@@ -89,6 +106,12 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
                   ? `It reported ${problems === 1 ? "a problem" : `${problems} problems`} in the real code. You judge ${problems === 1 ? "it" : "them"} in a later step.`
                   : "It reported no problems. That is an opinion, not proof."}
             </p>
+            {onApproved && (
+              <p className="mt-2 border-t border-hair pt-2 text-[13px] font-bold leading-snug">
+                On the objectives the owner approved:{" "}
+                {onApproved === "meets" ? "every one met, in its view." : onApproved === "not_met" ? "at least one not met." : "it could not decide every one."}
+              </p>
+            )}
           </section>
 
           <section className="rounded-lg border-2 border-ink bg-panel px-5 py-5">
@@ -105,15 +128,24 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
                 Replay
               </button>
             </div>
-            <p className="mt-2 text-[24px] font-extrabold leading-tight tracking-tight">
-              {counts.defects_total > 0 ? (
-                <>
-                  Noticed {done ? counts.defects_caught : "…"} of {counts.defects_total} planted mistakes
-                </>
-              ) : (
-                "Could not be tested"
-              )}
-            </p>
+            {counts.defects_total > 0 ? (
+              <>
+                <p className="mt-2 text-[21px] font-extrabold leading-tight tracking-tight">
+                  Noticed {done ? counts.defects_caught : "…"} of {counts.defects_total} breaks
+                </p>
+                <p className="text-[21px] font-extrabold leading-tight tracking-tight">
+                  {counts.harmless_total > 0
+                    ? `Alarmed on ${done ? counts.false_alarms : "…"} of ${counts.harmless_total} harmless edits`
+                    : "False alarms not measured"}
+                </p>
+                <p className="mt-2 text-[13px] leading-snug">
+                  <span className={`mr-1.5 rounded-sm px-1.5 py-px text-[11.5px] font-bold ${judgement.tone}`}>{judgement.word}</span>
+                  <span className="text-soft">On this change it {judgement.meaning}.</span>
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 text-[24px] font-extrabold leading-tight tracking-tight">Could not be tested</p>
+            )}
             <div className="mt-4 flex flex-wrap gap-1.5" role="list" aria-label="Planted edits">
               {exam.plants.map((plant, index) => {
                 const result = reviewer.results[plant.id];
@@ -148,6 +180,37 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
           </section>
         </div>
 
+        {others.length > 0 && (
+          <p className="rounded-lg border-2 border-ink bg-panel px-4 py-2.5 text-[13px] leading-snug">
+            <span className="font-bold">Same planted copies, other reviewer{others.length > 1 ? "s" : ""}: </span>
+            {others.map((item, index) => (
+              <span key={item.name}>
+                {index > 0 && "; "}
+                {prettyModel(item.name)} noticed {item.counts.defects_caught} of {item.counts.defects_total} breaks and alarmed on {item.counts.false_alarms} of{" "}
+                {item.counts.harmless_total} harmless edits ({JUDGEMENT[item.judgement ?? "untested"].word.toLowerCase()})
+              </span>
+            ))}
+            . A reviewer's record on one change says little about the next one; that is why it is tested on every change.
+          </p>
+        )}
+
+        {!signer && (
+          <section className="rounded-lg border-2 border-ink bg-warn-wash px-5 py-4">
+            <label htmlFor="reviewer-name" className="text-[14px] font-bold">
+              Your name: you are the engineer who signs this change
+            </label>
+            <input
+              id="reviewer-name"
+              value={nameDraft}
+              onChange={(event) => onNameDraft(event.target.value)}
+              autoComplete="name"
+              placeholder="Your name"
+              className="mt-2 w-full max-w-sm rounded-md border-2 border-ink bg-panel px-3 py-1.5 text-[14px] placeholder:text-faint"
+            />
+            <p className="mt-1.5 text-[12px] text-soft">Your checks are saved under your name in this browser, so someone else on this machine starts fresh.</p>
+          </section>
+        )}
+
         <AnimatePresence initial={false}>
           {pickedPlant && (
             <motion.div
@@ -163,9 +226,16 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
                   {KIND_LABEL[pickedPlant.kind]} we planted in a copy ·{" "}
                   <span className={RESULT_TEXT[reviewer.results[pickedPlant.id]]}>{RESULT_LABEL[reviewer.results[pickedPlant.id]]}</span>
                 </p>
-                <p className="mt-1 text-[13.5px]">{pickedPlant.description}</p>
+                {pickedPlant.hidden ? (
+                  <p className="mt-1 text-[13.5px]">
+                    What we planted here stays hidden until you sign: it is one of the spots you are asked to judge, and seeing it would make that
+                    meaningless.
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[13.5px]">{pickedPlant.description}</p>
+                )}
                 <p className="mt-0.5 text-[12.5px] text-soft">{KIND_MEANING[pickedPlant.kind]}</p>
-                {pickedPlant.patch[0] && (
+                {!pickedPlant.hidden && pickedPlant.patch[0] && (
                   <div className="mt-3 overflow-hidden rounded border border-hair">
                     <DiffView file={pickedPlant.patch[0]} className="max-h-40" />
                   </div>
@@ -192,6 +262,12 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
             </p>
             <ul className="mt-2 list-disc space-y-1 pl-4">
               <li>{reviewer.claim}</li>
+              {exam.changed_lines != null && exam.planted_lines != null && (
+                <li>
+                  Our planted edits touched {exam.planted_lines} of the {exam.changed_lines} changed lines. The reviewer's silence on the other lines is
+                  untested.
+                </li>
+              )}
               <li>
                 {counts.harmless_total > 0
                   ? `${counts.false_alarms} of ${counts.harmless_total} harmless edits wrongly reported.`

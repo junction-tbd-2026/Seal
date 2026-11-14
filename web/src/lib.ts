@@ -1,4 +1,4 @@
-import type { ChangeSummary, Exam, PlantKind, PullList, Result, SignResult, SpotVerdict } from "./types";
+import type { Approval, ChangeSummary, Exam, Judgement, Ledger, PlantKind, PullList, Result, SignResult, SpotVerdict } from "./types";
 
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -13,24 +13,40 @@ export const fetchPulls = () => getJson<PullList>("/api/pulls");
 /** The change to show for sign-off. It may be a spot-check copy; the page cannot tell and must not try to. */
 export const fetchReview = (changeId: string) => getJson<Exam>(`/api/review/${encodeURIComponent(changeId)}`);
 
-export async function postSignOff(body: {
+async function postJson<T>(url: string, body: unknown, what: string): Promise<T> {
+  const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error(typeof detail?.detail === "string" ? detail.detail : `${what} was refused (${response.status})`);
+  }
+  return (await response.json()) as T;
+}
+
+export const postSignOff = (body: {
   session: string;
   reviewer: string;
   name: string;
   decision: string;
   spots: { plant_id: string; verdict: SpotVerdict }[];
-}): Promise<SignResult> {
-  const response = await fetch("/api/signoff", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const detail = await response.json().catch(() => null);
-    throw new Error(detail?.detail ?? `sign-off was refused (${response.status})`);
-  }
-  return (await response.json()) as SignResult;
-}
+  points: Record<string, string>;
+  findings: Record<string, string>;
+}) => postJson<SignResult>("/api/signoff", body, "The sign-off");
+
+export const postApproval = (
+  changeId: string,
+  body: { name: string; objectives: { id: string; decision: string; risk: string }[]; added: { text: string; risk: string }[] },
+) => postJson<Approval>(`/api/objectives/${encodeURIComponent(changeId)}`, body, "The approval");
+
+export const fetchLedger = () => getJson<Ledger>("/api/ledger");
+
+/** What each judgement means, in plain words. */
+export const JUDGEMENT: Record<Judgement, { word: string; meaning: string; tone: string }> = {
+  sharp: { word: "Sharp", meaning: "noticed the breaks and stayed quiet on harmless edits", tone: "bg-caught text-white" },
+  jumpy: { word: "Jumpy", meaning: "reacted to harmless edits about as often as to real breaks", tone: "bg-warn text-ink" },
+  blind: { word: "Blind", meaning: "noticed almost none of the breaks", tone: "bg-missed text-white" },
+  mixed: { word: "Mixed", meaning: "missed breaks and raised false alarms", tone: "bg-warn text-ink" },
+  untested: { word: "Too few tests", meaning: "too few planted edits to judge", tone: "bg-canvas text-ink" },
+};
 
 /** "google/gemma-4-31B-it" -> "Gemma 4 31B"; "nemotron-3.5-super-vl" -> "Nemotron 3.5 Super VL". */
 export function prettyModel(name: string): string {

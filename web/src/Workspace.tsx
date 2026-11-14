@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DiffView, type Mark } from "./DiffView";
 import { fileName, prettyModel, sameFile } from "./lib";
+import { Objectives } from "./Objectives";
 import {
   buildSteps,
   clearSaved,
@@ -9,10 +10,13 @@ import {
   freshProgress,
   isBlank,
   openProgress,
+  readSigner,
   stepLabel,
   stepState,
   storageKey,
+  summaryLine,
   writeSaved,
+  writeSigner,
   type FindingAnswer,
   type PointAnswer,
   type Progress,
@@ -23,7 +27,7 @@ import {
 import { ReviewerTest } from "./ReviewerTest";
 import { SignOffStep } from "./SignOff";
 import { StepList } from "./StepList";
-import { Choice, FindingsBody, PointBody, SpotsBody } from "./StepPanel";
+import { AddedBody, Choice, FindingsBody, PointBody, ProvenBody, SpotsBody } from "./StepPanel";
 import type { Exam, Reviewer, SignOff, SpotVerdict } from "./types";
 
 type View = "step" | "whole";
@@ -45,6 +49,7 @@ const CONFIRM_OPTIONS: { value: PointAnswer; label: string; good: boolean }[] = 
 const DECIDE_OPTIONS: { value: PointAnswer; label: string; good: boolean }[] = [
   { value: "met", label: "Yes, it is met", good: true },
   { value: "not_met", label: "No, not met", good: false },
+  { value: "cannot_tell", label: "Can't tell: needs a run", good: true },
 ];
 
 /** Sets an answer, or takes it back when the same answer is pressed again. */
@@ -58,8 +63,14 @@ function toggled<T extends string>(record: Record<string, T>, id: string, value:
 /** The one sentence under the step title that says what to do here. */
 function stepTask(step: Step, reviewer: Reviewer): string {
   switch (step.kind) {
+    case "objectives":
+      return "A model drafted these objectives from the requirement, without seeing the code. Everything after this is measured against them, so the owner of the requirement approves them first: strike what is out of scope, mark what is risky, add what is missing.";
     case "intro":
-      return "Before you check anything yourself, see what the reviewer said and how it did on our test.";
+      return "Before you check anything yourself, see what the reviewer said and whether it could tell real breaks from harmless edits on this change.";
+    case "proven":
+      return "On these, the reviewer took back \"met\" every time we broke the lines it cites, and never on a harmless edit there. They need no reading; accept them as proven.";
+    case "added":
+      return "The owner added this objective. The AI never reviewed it, so read the whole change with it in mind and decide.";
     case "point":
       return step.todo;
     case "spots":
@@ -85,6 +96,7 @@ export function Workspace({
   onReviewer,
   onSign,
   onSaved,
+  onReload,
 }: {
   exam: Exam;
   reviewer: Reviewer;
@@ -93,15 +105,39 @@ export function Workspace({
   signoffs: SignOff[];
   header: React.ReactNode;
   onReviewer: (name: string) => void;
-  onSign: (name: string, decision: string, spots: { plant_id: string; verdict: SpotVerdict }[]) => Promise<void>;
+  onSign: (
+    name: string,
+    decision: string,
+    spots: { plant_id: string; verdict: SpotVerdict }[],
+    points: Record<string, string>,
+    findings: Record<string, string>,
+  ) => Promise<void>;
   /** Called after the saved checks change, so the list of pull requests can show progress. */
   onSaved: () => void;
+  /** Reload the pull request, e.g. after the owner approved its objectives. */
+  onReload: () => Promise<void>;
 }) {
-  const key = storageKey(exam.change.id, reviewer.name);
+  // Checks belong to the person doing them: the name comes first, and two people never share checks.
+  const [signer, setSignerState] = useState(readSigner);
+  const [nameDraft, setNameDraft] = useState("");
+  const key = signer ? storageKey(exam.change.id, reviewer.name, signer) : null;
   const steps = useMemo(() => buildSteps(exam, reviewer), [exam, reviewer]);
-  const [opened] = useState(() => openProgress(key, reviewer.run_file, code));
+  const [opened, setOpened] = useState(() => openProgress(key, reviewer.run_file, code));
   const [progress, setProgress] = useState<Progress>(opened.progress);
   const [stale, setStale] = useState(opened.stale);
+  const summary = summaryLine(exam, reviewer);
+
+  const setSigner = (name: string) => {
+    const clean = name.trim();
+    writeSigner(clean);
+    setSignerState(clean);
+    const next = openProgress(clean ? storageKey(exam.change.id, reviewer.name, clean) : null, reviewer.run_file, code);
+    // A person who starts now keeps what they did before typing their name.
+    const keep = clean && isBlank(next.progress) ? { ...progress } : next.progress;
+    setOpened({ progress: next.progress, stale: next.stale });
+    setProgress(keep);
+    setStale(next.stale);
+  };
   const [view, setView] = useState<View>("step");
   const [filePath, setFilePath] = useState<string | null>(() => {
     // Open the whole change on the file the planted edits live in: that is the one worth reading.
@@ -112,7 +148,7 @@ export function Workspace({
 
   const mine = signoffs.filter((entry) => entry.reviewer === reviewer.name);
   const signed = mine[mine.length - 1] ?? null;
-  const states: StepState[] = steps.map((item) => stepState(item, progress, signed));
+  const states: StepState[] = steps.map((item) => stepState(item, progress, signed, exam));
   const done = states.filter((state) => state.done).length;
   const index = Math.max(0, steps.findIndex((item) => item.id === progress.step));
   const step = steps[index];
@@ -121,13 +157,13 @@ export function Workspace({
 
   // Checks made on older code or older results are gone for good, not kept for a later visit.
   useEffect(() => {
-    if (!opened.stale) return;
+    if (!opened.stale || !key) return;
     clearSaved(key);
     onSaved();
   }, [opened, key, onSaved]);
 
   useEffect(() => {
-    if (progress === opened.progress) return;
+    if (!key || progress === opened.progress) return;
     if (isBlank(progress)) clearSaved(key);
     else writeSaved(key, { ...progress, done, total: steps.length, savedAt: new Date().toISOString() });
     onSaved();
@@ -143,6 +179,15 @@ export function Workspace({
   };
   const onSpot = (plantId: string, verdict: SpotVerdict) => check((current) => ({ spots: toggled(current.spots, plantId, verdict) }));
   const onPoint = (pointId: string, answer: PointAnswer) => check((current) => ({ points: toggled(current.points, pointId, answer) }));
+  const acceptProven = (ids: string[], accept: boolean) =>
+    check((current) => {
+      const points = { ...current.points };
+      ids.forEach((id) => {
+        if (accept) points[id] = "met";
+        else delete points[id];
+      });
+      return { points };
+    });
   const onFinding = (findingId: string, answer: FindingAnswer) => check((current) => ({ findings: toggled(current.findings, findingId, answer) }));
 
   const showInWhole = (path: string, line: number) => {
@@ -181,28 +226,28 @@ export function Workspace({
     const before = seen.current;
     seen.current = { step: step.id, done: state.done };
     if (before.step !== step.id || before.done || !state.done) return;
-    if (step.kind === "intro" || step.kind === "sign") return;
+    if (step.kind === "intro" || step.kind === "sign" || step.kind === "objectives") return;
     const timer = window.setTimeout(() => goTo(nextOpen.id), ADVANCE_MS);
     return () => window.clearTimeout(timer);
     // Only a step turning from open to done should move on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step.id, state.done]);
 
-  const question =
-    step.kind !== "point"
-      ? null
-      : spotsLeft > 0
-        ? null
-        : step.tone === "verified"
-          ? "Do the lines show this is met?"
-          : "Is this met in the real code?";
+  const question = step.kind === "added" ? "Is this met in the real code?" : step.kind !== "point" ? null : spotsLeft > 0 ? null : "Is this met in the real code?";
 
   return (
     <div className="grid h-full grid-cols-[minmax(0,1fr)_18.5rem]">
       <section className="flex min-h-0 min-w-0 flex-col bg-panel">
         <div className="border-b border-hair px-8 pb-5 pt-4">
           {header}
-          <p className="mt-5 flex items-center gap-2 text-[12.5px] font-bold text-soft">
+          <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] font-bold">
+            <span className={summary.approved ? "" : "text-missed"}>
+              {summary.objectives} {summary.objectives === 1 ? "objective" : "objectives"} {summary.approved ? "approved by the owner" : "not approved yet"}
+            </span>
+            <span className="text-caught">{summary.proven} proven by our test</span>
+            <span className="text-missed">{summary.forYou} for you to decide</span>
+          </p>
+          <p className="mt-4 flex items-center gap-2 text-[12.5px] font-bold text-soft">
             Step {index + 1} of {steps.length}
             {step.kind === "point" && <span className={`rounded-sm px-1.5 py-px text-[11px] ${TONE_CHIP[step.tone]}`}>{step.chip}</span>}
           </p>
@@ -254,8 +299,14 @@ export function Workspace({
             </div>
             {file && <DiffView file={file} marks={marks} focus={focus?.line ?? null} key={`${file.path}-${focus?.token ?? 0}`} className="min-h-0 flex-1" />}
           </>
+        ) : step.kind === "objectives" ? (
+          <Objectives key={exam.approval?.approved_at ?? "draft"} exam={exam} onApproved={onReload} />
         ) : step.kind === "intro" ? (
-          <ReviewerTest exam={exam} reviewer={reviewer} />
+          <ReviewerTest exam={exam} reviewer={reviewer} signer={signer} nameDraft={nameDraft} onNameDraft={setNameDraft} />
+        ) : step.kind === "proven" ? (
+          <ProvenBody points={step.points} onOpen={showInWhole} />
+        ) : step.kind === "added" ? (
+          <AddedBody onWholeChange={() => setView("whole")} />
         ) : step.kind === "point" ? (
           <PointBody key={step.id} step={step} {...shared} onWholeChange={() => setView("whole")} />
         ) : step.kind === "spots" ? (
@@ -264,6 +315,10 @@ export function Workspace({
           <FindingsBody findings={step.findings} files={exam.change.files} progress={progress} onOpen={showInWhole} onFinding={onFinding} />
         ) : (
           <SignOffStep
+            exam={exam}
+            reviewer={reviewer}
+            progress={progress}
+            signer={signer}
             steps={steps.slice(0, -1)}
             states={states.slice(0, -1)}
             mine={mine}
@@ -273,6 +328,8 @@ export function Workspace({
                 name,
                 decision,
                 reviewer.read_yourself.filter((id) => progress.spots[id]).map((id) => ({ plant_id: id, verdict: progress.spots[id] })),
+                progress.points,
+                progress.findings,
               )
             }
           />
@@ -281,6 +338,23 @@ export function Workspace({
         {step.kind !== "sign" && (
           <div className="flex min-h-[4rem] flex-wrap items-center gap-x-5 gap-y-2 border-t-2 border-ink bg-panel px-8 py-3">
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2">
+              {step.kind === "proven" && (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <p className="text-[15px] font-bold">Accept these as proven?</p>
+                  <Choice
+                    value={state.done ? "yes" : undefined}
+                    options={[{ value: "yes", label: "Yes, accept as proven", good: true }]}
+                    onPick={() => acceptProven(step.points.map((point) => point.id), !state.done)}
+                  />
+                </div>
+              )}
+              {step.kind === "added" && (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <p className="text-[15px] font-bold">{question}</p>
+                  <Choice value={progress.points[step.objective.id]} options={DECIDE_OPTIONS} onPick={(answer) => onPoint(step.objective.id, answer)} />
+                </div>
+              )}
+              {step.kind === "objectives" && !state.done && <p className="text-[14px] text-soft">The owner approves the objectives above.</p>}
               {step.kind === "point" && question && (
                 // Unfolds once the red spots are judged, so there is one thing to do at a time.
                 <motion.div
@@ -306,7 +380,9 @@ export function Workspace({
                 </p>
               )}
               {step.kind === "findings" && !state.done && <p className="text-[14px] text-soft">Answer each reported problem above.</p>}
-              {state.done && step.kind !== "intro" && step.kind !== "point" && <p className="text-[14px] font-bold text-caught">✓ Done</p>}
+              {state.done && step.kind !== "intro" && step.kind !== "point" && step.kind !== "proven" && step.kind !== "added" && (
+                <p className="text-[14px] font-bold text-caught">✓ Done</p>
+              )}
             </div>
             <div className="flex shrink-0 items-center gap-4">
               {index > 0 && (
@@ -317,7 +393,10 @@ export function Workspace({
               {step.kind === "intro" ? (
                 <button
                   type="button"
+                  disabled={!signer && !nameDraft.trim()}
+                  title={!signer && !nameDraft.trim() ? "Type your name first" : undefined}
                   onClick={() => {
+                    if (!signer) setSigner(nameDraft);
                     if (!progress.intro) check(() => ({ intro: true }));
                     goTo(nextOpen.id);
                   }}
@@ -350,6 +429,13 @@ export function Workspace({
         onView={setView}
         onGoTo={goTo}
         onReviewer={onReviewer}
+        signer={signer}
+        onSwitchPerson={() => {
+          setSigner("");
+          setProgress(freshProgress(reviewer.run_file, code));
+          setView("step");
+          setProgress((current) => ({ ...current, step: "intro" }));
+        }}
         onClear={() => {
           setStale(false);
           setProgress(freshProgress(reviewer.run_file, code));

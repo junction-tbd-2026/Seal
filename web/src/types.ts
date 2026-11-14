@@ -15,6 +15,10 @@ export type Plant = {
   line_start: number;
   line_end: number;
   breaks?: string | null;
+  /** For a harmless edit: the objective whose cited lines it sits in. */
+  near?: string | null;
+  /** What was planted here is withheld until signing: it is a spot the person judges. */
+  hidden?: boolean;
   patch: FileDiff[];
 };
 
@@ -33,6 +37,13 @@ export type PointView = {
   reason: string;
   broken_total: number;
   broken_noticed: number;
+  /** Of those breaks, how many made the reviewer take back "met". */
+  broken_withdrew?: number;
+  /** Harmless edits planted in the same cited lines, and how many made it take back "met". */
+  harmless_near?: number;
+  harmless_near_alarms?: number;
+  /** At least two breaks here, every one noticed by taking back "met", and no alarm on a harmless edit here. */
+  proven?: boolean;
   /** "unstable": the reviewer answered differently on two identical reviews, so the point is not scored. */
   noticed: "yes" | "no" | "partly" | "untested" | "unstable";
   /** Planted edits aimed at this point that fell outside the lines the reviewer cited. Not counted here. */
@@ -46,8 +57,12 @@ export type PointView = {
   missed_plants: string[];
 };
 
+/** How the reviewer behaved as a detector on this change. */
+export type Judgement = "sharp" | "jumpy" | "blind" | "mixed" | "untested";
+
 export type Reviewer = {
   name: string;
+  judgement?: Judgement;
   points: PointView[];
   run_file: string;
   created_at: string;
@@ -84,7 +99,22 @@ export type SignOff = {
   decision: string;
   signed_at: string;
   spots?: { plant_id: string; verdict: SpotVerdict }[];
+  points?: Record<string, string>;
+  findings?: Record<string, string>;
+  seconds?: number | null;
 };
+
+export type ApprovedObjective = {
+  id: string;
+  text: string;
+  decision: "keep" | "strike";
+  risk: "normal" | "high";
+  note?: string;
+  /** Added by the owner: the AI never reviewed it. */
+  added?: boolean;
+};
+
+export type Approval = { change_id: string; name: string; approved_at: string; objectives: ApprovedObjective[] };
 
 export type Exam = {
   change: {
@@ -103,6 +133,11 @@ export type Exam = {
   plants: Plant[];
   reviewers: Reviewer[];
   signoffs: SignOff[];
+  /** The owner's approval of the objectives, if there is one. */
+  approval?: Approval | null;
+  changed_lines?: number;
+  /** Changed lines that at least one planted edit touched. */
+  planted_lines?: number;
 };
 
 export type ChangeSummary = {
@@ -113,7 +148,7 @@ export type ChangeSummary = {
   reviewers: string[];
 };
 
-export type PullStatus = "untested" | "needs_you" | "clear" | "signed";
+export type PullStatus = "untested" | "needs_you" | "clear" | "signed" | "full_read_rule";
 
 export type Pull = {
   number: number;
@@ -128,6 +163,9 @@ export type Pull = {
   reviewers: string[];
   caught?: number;
   planted_defects?: number;
+  approved?: boolean;
+  /** Why a change goes to a full human read without the AI test. */
+  rule?: string;
   signed: SignOff | null;
 };
 
@@ -144,4 +182,43 @@ export type PullList = {
 /** What signing returns: either a recorded sign-off, or the reveal that the copy shown was a spot-check. */
 export type SignResult =
   | { spot_check: false; signoff: SignOff }
-  | { spot_check: true; caught: boolean; spotted: boolean; seconds: number; plant: Plant; record: SpotRecord };
+  | { spot_check: true; caught: boolean; refused?: boolean; spotted: boolean; seconds: number; plant: Plant; record: SpotRecord };
+
+export type LedgerChange = {
+  number: number;
+  title: string;
+  status: PullStatus;
+  files?: number;
+  objectives?: number;
+  proven?: number;
+  to_human?: number;
+  approved_by?: string | null;
+  changed_lines?: number;
+  planted_lines?: number;
+  rule?: string;
+  reviewers?: { name: string; judgement: Judgement; caught: number; defects: number; alarms: number; harmless: number }[];
+  signed?: { name: string; decision: string; seconds?: number | null } | null;
+};
+
+export type LedgerArea = {
+  area: string;
+  routed_share: number[];
+  catch_rate: number[];
+  alarm_rate: number[];
+  minutes_to_sign: number[];
+  escapes: number[];
+  reverts: number[];
+  plants_per_point: number[];
+  events?: { week: string; what: string; effect: string }[];
+};
+
+export type Ledger = {
+  measures: {
+    routed_to_human: { routed: number; total: number };
+    time_to_sign: { median_seconds: number | null; signoffs: number };
+    findings_real: { real: number; judged: number };
+    signer_drill: { caught: number; checked: number };
+  };
+  changes: LedgerChange[];
+  example: { synthetic: boolean; label: string; weeks: string[]; areas: LedgerArea[] } | null;
+};

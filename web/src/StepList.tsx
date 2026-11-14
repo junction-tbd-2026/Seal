@@ -13,6 +13,8 @@ const TONE_CHIP: Record<Tone, string> = {
 
 function stepTone(step: Step): Tone | null {
   if (step.kind === "point") return step.tone;
+  if (step.kind === "proven") return "verified";
+  if (step.kind === "added") return "unproven";
   if (step.kind === "spots") return "risk";
   if (step.kind === "findings") return "unproven";
   return null;
@@ -20,6 +22,9 @@ function stepTone(step: Step): Tone | null {
 
 function stepChip(step: Step): string | null {
   if (step.kind === "point") return step.chip;
+  if (step.kind === "proven") return "No reading needed";
+  if (step.kind === "added") return "Not reviewed by the AI";
+  if (step.kind === "objectives") return "The owner approves";
   if (step.kind === "spots") return "Missed our breaks";
   if (step.kind === "findings") return "You decide";
   return null;
@@ -40,6 +45,8 @@ export function StepList({
   onView,
   onGoTo,
   onReviewer,
+  signer,
+  onSwitchPerson,
   onClear,
 }: {
   exam: Exam;
@@ -54,6 +61,9 @@ export function StepList({
   onView: (view: "step" | "whole") => void;
   onGoTo: (stepId: string) => void;
   onReviewer: (name: string) => void;
+  /** The person reviewing, if they gave their name. */
+  signer: string;
+  onSwitchPerson: () => void;
   onClear: () => void;
 }) {
   const [confirmClear, setConfirmClear] = useState(false);
@@ -188,7 +198,20 @@ export function StepList({
           </p>
         ) : (
           <p className="flex items-center justify-between gap-2">
-            <span title="You can stop and continue later on this device.">Saved in this browser</span>
+            <span className="min-w-0 truncate" title="Your checks are saved under your name in this browser.">
+              {signer ? (
+                <>
+                  Reviewing as <span className="font-bold text-ink">{signer}</span>
+                  {signer && (
+                    <button type="button" onClick={onSwitchPerson} className="ml-2 font-bold text-ink underline underline-offset-2">
+                      Not you?
+                    </button>
+                  )}
+                </>
+              ) : (
+                "Not saved until you give your name"
+              )}
+            </span>
             {started && (
               <button type="button" onClick={() => setConfirmClear(true)} className="font-bold text-ink underline underline-offset-2">
                 Start over
