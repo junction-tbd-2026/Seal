@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reviewer Controls · Pitch</title>
+<link rel="stylesheet" href="deck.css">
+</head>
+<body>
+
+<!-- Icons used across the deck. The bundled fonts have no arrows or check marks. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M4.5 12.5l5 5 10-11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-cross" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-mark" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#2b50ff"/><path d="M9 16.5l5 5 9.5-10.5" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<main class="stage" id="stage">
+
+  <!-- 01 · Title -->
+  <section class="slide dark s-title">
+    <div class="safe">
+      <header class="top">
+        <div class="wordmark rise" style="--d:150"><svg><use href="#i-mark"/></svg>Reviewer Controls</div>
+        <div class="kicker rise" style="--d:250">Junction 2026 <i>/</i> Tieto <i>/</i> Earned Trust in AI Code</div>
+      </header>
+      <h1 class="mega">
+        <span class="mask" style="--d:350"><span>Test the reviewer.</span></span>
+        <span class="mask" style="--d:500"><span>Then <span class="signed">sign.<svg class="scribble" viewBox="0 0 300 40" aria-hidden="true"><path pathLength="1" d="M4 24 C 58 6, 104 36, 158 19 S 246 8, 296 21"/></svg></span></span></span>
+      </h1>
+      <p class="lede rise" style="--d:950">Humans check the blind spots of agents.</p>
+      <div class="powered rise" style="--d:1250">
+        <span>Powered by</span>
+        <img src="img/logos/tieto.svg" alt="Tieto" style="--h:26px">
+        <img src="img/logos/gemini.svg" alt="Google Gemini" style="--h:28px">
+        <img src="img/logos/craci.svg" alt="CRACI" style="--h:22px">
+        <img src="img/logos/aiven.svg" alt="Aiven" style="--h:30px">
+        <img src="img/logos/nvidia.svg" alt="NVIDIA" style="--h:22px">
+      </div>
+      <div class="team rise" style="--d:1100">Niek Adams <i>/</i> Elin Lucia Dobrostal <i>/</i> Timo Gültzow <i>/</i> Stepan Konoplianko</div>
+    </div>
+    <aside class="notes" data-time="0:10">
+      AI agents now write whole pull requests. Tieto asked: how can AI review that code so that a human can trust it?
+      Our answer is in the title. Test the reviewer, then sign.
+    </aside>
+  </section>
+
+  <!-- 02 · Problem -->
+  <section class="slide light s-problem">
+    <div class="safe">
+      <div class="kicker rise" style="--d:150">The problem</div>
+      <h2 class="head rise" style="--d:230">AI writes the code. AI reviews it.<br>A human signs.</h2>
+
+      <div class="chain">
+        <article class="node n1">
+          <div class="tag">AI agent</div>
+          <div class="pr">
+            <b>Pull request #1</b>
+            <span>Fixes a crash in the code generator</span>
+            <span class="files"><i></i><i></i><i></i><i></i>4 files changed</span>
+          </div>
+        </article>
+        <i class="link l1"></i>
+        <article class="node n2">
+          <div class="tag">AI reviewer</div>
+          <p class="said"><span class="typed">Looks good to me.</span></p>
+        </article>
+        <i class="link l2"></i>
+        <article class="node n3">
+          <div class="tag">Accountable human</div>
+          <div class="sign">
+            <svg viewBox="0 0 320 90" aria-hidden="true"><path pathLength="1" d="M10 62 C 30 12, 52 14, 46 50 S 60 86, 82 40 S 96 22, 108 54 S 128 70, 140 42 S 160 30, 168 56 S 196 66, 214 38 S 250 44, 310 30"/></svg>
+            <span>Approved</span>
+          </div>
+        </article>
+      </div>
+
+      <p class="punch frag" data-step="1">“Looks good” gives a human <em>nothing to sign.</em></p>
+    </div>
+    <aside class="notes" data-time="0:20">
+      Today an AI agent writes the change. An AI reviewer reads it and says "looks good". Then a named human signs.
+      [click] But "looks good" is an opinion. It gives the human nothing to sign.
+    </aside>
+  </section>
+
+  <!-- 03 · Proof -->
+  <section class="slide dark s-proof">
+    <div class="safe">
+      <div class="kicker rise" style="--d:150">What we found <i>/</i> Tieto's sample pull request #1</div>
+      <h2 class="beats">
+        <span class="beat b0 rise" style="--d:230">The AI reviewer cited one line as proof.</span>
+        <span class="beat b1 frag" data-step="1">We broke that line.</span>
+        <span class="beat b2 frag" data-step="2">It still said <em>“met”.</em></span>
+      </h2>
+
+      <div class="codecard rise" style="--d:420">
+        <div class="code">
+          <div class="code-head">
+            <span class="file">CodeAnalysis/TypeCollector.cs</span>
+            <span class="copytag">blind copy, planted break</span>
+          </div>
+          <div class="lines">
+            <div class="ln"><b>237</b><code>{</code></div>
+            <div class="ln"><b>238</b><code>    this.typeReferences = referenceSymbols;</code></div>
+            <div class="ln cited"><b>239</b><code>    this.reportDiagnostic = reportAnalyzerDiagnostic is null ? null : diagnostic =&gt;</code></div>
+            <div class="ln cited del"><b></b><code>        <s>ReportIfLocatedInCompilation(reportAnalyzerDiagnostic, diagnostic);</s></code></div>
+            <div class="ln add"><b></b><code>        reportAnalyzerDiagnostic(diagnostic);</code></div>
+            <div class="ln"><b>240</b><code>    this.options = options;</code></div>
+            <div class="ln"><b>241</b><code>    this.compilation = compilation;</code></div>
+          </div>
+        </div>
+        <aside class="verdicts">
+          <div class="v-label">AI reviewer's verdict</div>
+          <p class="v-claim">Requirement point 2:<br>the analyzer no longer crashes.</p>
+          <div class="v-row r1">
+            <span class="v-when">On the real change</span>
+            <span class="chip"><svg><use href="#i-check"/></svg>met</span>
+            <span class="v-note">its proof: line 239</span>
+          </div>
+          <div class="v-row r2">
+            <span class="v-when">With line 239 broken</span>
+            <span class="chip hot"><svg><use href="#i-check"/></svg>met</span>
+            <span class="v-note">it did not notice</span>
+          </div>
+        </aside>
+      </div>
+      <p class="caption rise" style="--d:600">Real run on MessagePack-CSharp. Reviewer: Nemotron 3.5 Super VL, in a fresh session, not told it was a test.</p>
+    </div>
+    <aside class="notes" data-time="0:30">
+      Here is what that looks like on Tieto's own sample. The reviewer said the crash was fixed, and cited this line as its proof.
+      [click] So we made a copy and removed the fix on exactly that line.
+      [click] Same reviewer, fresh session, no idea it was a test. It still said "met".
+    </aside>
+  </section>
+
+  <!-- 04 · Answer -->
+  <section class="slide blue s-answer">
+    <div class="safe">
+      <div class="kicker rise" style="--d:150">Our answer</div>
+      <h2 class="statement">
+        <span class="mask" style="--d:250"><span>Every claim points at evidence.</span></span>
+        <span class="mask" style="--d:420"><span>Every approval is tested:</span></span>
+        <span class="mask" style="--d:590"><span>the AI's and the human's.</span></span>
+      </h2>
+      <p class="lede rise" style="--d:1050">We do not ask the human to trust the reviewer.<br>We test it on the exact change in front of it.</p>
+    </div>
+    <aside class="notes" data-time="0:10">
+      So we do not ask the human to trust the reviewer.
+      Every claim points at evidence, and every approval is tested: the AI's and the human's.
+    </aside>
+  </section>
+
+  <!-- 05 · How it works -->
+  <section class="slide light s-how">
+    <div class="safe">
+      <div class="kicker rise" style="--d:150">How it works</div>
+      <h2 class="head trio rise" style="--d:230"><span class="w w1">Cite.</span> <span class="w w2">Break.</span> <span class="w w3">Re-review.</span></h2>
+
+      <div class="cols">
+        <article class="col c1">
+          <div class="viz v-cite">
+            <span class="ro">Point 2</span>
+            <i class="wire"></i>
+            <div class="doc"><i></i><i></i><i></i><i class="c"></i><i class="c"></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="num">01</div>
+          <h3>The reviewer cites its proof</h3>
+          <p>For each point of the requirement it must cite the lines that show it. No lines, no “met”.</p>
+        </article>
+
+        <article class="col c2">
+          <div class="viz v-break">
+            <figure><div class="doc mini"><i></i><i></i><i class="x"></i><i></i><i></i></div><figcaption>bug</figcaption></figure>
+            <figure><div class="doc mini"><i></i><i></i><i class="x gone"></i><i></i><i></i></div><figcaption>omission</figcaption></figure>
+            <figure><div class="doc mini"><i></i><i></i><i class="x soft"></i><i></i><i></i></div><figcaption>harmless</figcaption></figure>
+          </div>
+          <div class="num">02</div>
+          <h3>We break exactly those lines</h3>
+          <p>A second model plants one break per copy of the change: bugs, omissions and harmless rewrites.</p>
+        </article>
+
+        <article class="col c3">
+          <div class="viz v-rereview">
+            <figure class="ok"><div class="doc mini"><i></i><i></i><i class="x"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-check"/></svg></span><figcaption>caught</figcaption></figure>
+            <figure class="miss"><div class="doc mini"><i></i><i></i><i class="x gone"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-cross"/></svg></span><figcaption>missed</figcaption></figure>
+            <figure class="ok"><div class="doc mini"><i></i><i></i><i class="x soft"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-check"/></svg></span><figcaption>left alone</figcaption></figure>
+          </div>
+          <div class="num">03</div>
+          <h3>It reviews every copy, blind</h3>
+          <p>Fresh session, normal prompt. Its “met” counts only where it noticed the break.</p>
+        </article>
+      </div>
+
+      <p class="outcome frag" data-step="3"><svg><use href="#i-arrow"/></svg>The result is not a score. It is <em>the list of lines a human must read.</em></p>
+    </div>
+    <aside class="notes" data-time="0:30">
+      Three steps. Cite: for every point of the requirement, the reviewer must cite the lines that prove it.
+      [click] Break: a second model breaks those exact lines, one break per copy. Bugs, omissions, and harmless rewrites to catch false alarms.
+      [click] Re-review: the reviewer judges every copy blind. Its "met" only counts where it noticed.
+      [click] The result is not a score. It is the list of lines a human must read.
+    </aside>
+  </section>
+
+  <!-- 06 · Sign-off (product) -->
+  <section class="slide dark s-product">
+    <div class="safe">
+      <div class="left">
+        <div class="kicker rise" style="--d:150">The sign-off <i>/</i> working prototype</div>
+        <h2 class="head rise" style="--d:230">The human reads only where the AI proved blind.</h2>
+        <ol class="points">
+          <li class="frag" data-step="1"><b>Sent straight to line 239.</b> The reviewer missed a planted break there.</li>
+          <li class="frag" data-step="2"><b>A verdict on every marked spot.</b> Accept stays locked until then.</li>
+          <li class="frag" data-step="3"><b>The signer is tested too.</b> Some sign-offs show a planted bug. Approve it and it is recorded; nothing is approved.</li>
+        </ol>
+      </div>
+      <figure class="browser rise" style="--d:380">
+        <div class="bar"><i></i><i></i><i></i><span>Reviewer Controls</span></div>
+        <div class="screen">
+          <img class="shot a" src="img/product-objective.png" alt="The audit page for one requirement point: the cited code with the line the AI reviewer missed, and the question whether line 239 is correct.">
+          <img class="shot b" src="img/product-signoff.png" alt="The sign-off page: five steps are open, and Accept is locked until each one is finished.">
+          <i class="spot"></i>
+        </div>
+      </figure>
+    </div>
+    <aside class="notes" data-time="0:30 + demo">
+      This is what the accountable person gets. It is a working prototype on Tieto's samples.
+      [click] They land on the one line where the reviewer was blind, and judge the real code there.
+      [click] Accept stays locked until every marked spot has a verdict.
+      [click] And because people rubber-stamp too, some sign-offs show a planted bug. Approve it and it is recorded. Nothing is approved.
+      Switch to the live page here if there is time.
+    </aside>
+  </section>
+
+  <!-- 07 · Evidence -->
+  <section class="slide light s-evidence">
+    <div class="safe">
+      <div class="kicker rise" style="--d:150">Evidence <i>/</i> Tieto's sample changes</div>
+      <h2 class="head rise" style="--d:230">Both said “meets the requirement”.<br>Only one noticed the breaks.</h2>
+
+      <div class="panels">
+        <section class="panel p-dots rise" style="--d:400">
+          <h3>Pull request #1 <span>the same 7 planted defects</span></h3>
+          <div class="row nemo">
+            <div class="who">Nemotron 3.5 Super VL<span class="chip line">meets requirement</span></div>
+            <div class="dots"><i class="hit"></i><i class="hit"></i><i class="hit"></i><i></i><i class="hit"></i><i class="hit"></i><i></i></div>
+            <div class="val"><b>5</b> of 7 caught</div>
+          </div>
+          <div class="row gemma">
+            <div class="who">Gemma 4 31B<span class="chip line">meets requirement</span></div>
+            <div class="dots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="val"><b>0</b> of 7 caught</div>
+          </div>
+          <div class="legend"><i class="hit"></i>caught<i></i>missed</div>
+        </section>
+
+        <section class="panel p-range frag" data-step="1">
+          <h3>All changes tested so far <span>catch rate, 95% interval</span></h3>
+          <div class="chart" role="img" aria-label="Catch rate of planted defects with 95 percent interval. Nemotron 3.5 Super VL: 11 of 14 caught, between 52 and 92 percent. Gemma 4 31B: 1 of 13 caught, between 1 and 33 percent.">
+            <div class="rrow nemo">
+              <div class="rlabel"><span>Nemotron 3.5 Super VL</span><span class="rval"><b>11 of 14</b> 52% to 92%</span></div>
+              <div class="track"><i class="range" style="--lo:52;--hi:92;--pt:78.6"></i><i class="pt" style="--pt:78.6"></i></div>
+            </div>
+            <div class="rrow gemma">
+              <div class="rlabel"><span>Gemma 4 31B</span><span class="rval"><b>1 of 13</b> 1% to 33%</span></div>
+              <div class="track"><i class="range" style="--lo:1;--hi:33;--pt:7.7"></i><i class="pt" style="--pt:7.7"></i></div>
+            </div>
+            <div class="axis"><span style="--x:0">0%</span><span style="--x:50">50%</span><span style="--x:100">100%</span></div>
+          </div>
+          <div class="legend"><i class="lg-bar"></i>95% interval<i class="lg-tick"></i>share caught</div>
+        </section>
+      </div>
+
+      <p class="caption rise" style="--d:650">Runs saved 14 November on 3 of the 4 sample changes. Both reviewers saw identical breaks, written by a third model. The breaks are not yet compiled and run, and counts are small, so we report ranges and never a single score.</p>
+    </div>
+    <aside class="notes" data-time="0:25">
+      Does this tell reviewers apart? Both models approved Tieto's first change. One caught five of the seven planted defects. The other caught none.
+      [click] Across the changes we have run so far: 11 of 14 against 1 of 13. We report ranges, because the samples are small.
+    </aside>
+  </section>
+
+  <!-- 08 · Measuring trust -->
+  <section class="slide light s-measure">
+    <div class="safe">
+      <div class="kicker rise" style="--d:150">Measuring trust <i>/</i> in a real team</div>
+      <h2 class="head rise" style="--d:230">Trust becomes a track record.</h2>
+
+      <div class="cols">
+        <article class="col rise" style="--d:420">
+          <div class="viz v-gate">
+            <div class="check">
+              <span class="pulse"></span>
+              <div><b>Reviewer Controls</b><span>caught 5 of 7 planted defects</span><span class="todo">1 line needs a human: TypeCollector.cs:239</span></div>
+            </div>
+          </div>
+          <h3>A gate on every pull request</h3>
+          <p>Each change gets a status and a to-do list for its owner. Not a grade.</p>
+        </article>
+
+        <article class="col rise" style="--d:560">
+          <div class="viz v-record">
+            <div class="rec"><span>Bugs caught</span><div class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></div><b>7 of 8</b></div>
+            <div class="rec"><span>Omissions caught</span><div class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></div><b>4 of 6</b></div>
+            <div class="rec"><span>False alarms</span><div class="pips"><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i></div><b>2 of 6</b></div>
+          </div>
+          <h3>A record for every reviewer</h3>
+          <p>Every planted edit is a labelled test. Rates build up per reviewer, code area and kind of defect.</p>
+        </article>
+
+        <article class="col rise" style="--d:700">
+          <div class="viz v-risk">
+            <div class="tier"><span>Low risk</span><div class="pips n5"></div><b>sign the card</b></div>
+            <div class="tier"><span>Medium</span><div class="pips n10"></div><b>read marked lines</b></div>
+            <div class="tier"><span>High risk</span><div class="pips n30"></div><b>full read</b></div>
+          </div>
+          <h3>Depth follows risk</h3>
+          <p>More planted edits where it matters: 10 of 10 caught supports “at least 74%”, 30 of 30 “at least 90%”.</p>
+        </article>
+      </div>
+
+      <p class="next rise" style="--d:1000"><span>Next</span>Build and run every planted copy <i>/</i> start the check from the pull request <i>/</i> finish all four sample changes</p>
+    </div>
+    <aside class="notes" data-time="0:20">
+      For a team, this turns trust into a track record. Every pull request gets a gate and a to-do list.
+      Every planted edit is a labelled test, so catch rates and false-alarm rates build up per reviewer, per code area and per kind of defect.
+      And the depth of the test follows the risk of the change.
+      Next, we build and run every planted copy, so each break is proven real.
+    </aside>
+  </section>
+
+  <!-- 09 · Close -->
+  <section class="slide dark s-close">
+    <div class="safe">
+      <header class="top">
+        <div class="wordmark rise" style="--d:150"><svg><use href="#i-mark"/></svg>Reviewer Controls</div>
+        <div class="kicker rise" style="--d:250">Junction 2026 <i>/</i> Tieto <i>/</i> Earned Trust in AI Code</div>
+      </header>
+      <ul class="recap">
+        <li style="--d:350"><svg><use href="#i-check"/></svg>Every claim cites its evidence.</li>
+        <li style="--d:650"><svg><use href="#i-check"/></svg>Every AI reviewer is tested on the change in front of it.</li>
+        <li style="--d:950"><svg><use href="#i-check"/></svg>Every human approval is tested too.</li>
+      </ul>
+      <h1 class="mega">
+        <span class="mask" style="--d:1350"><span>Test the reviewer.</span></span>
+        <span class="mask" style="--d:1500"><span>Then <span class="signed">sign.<svg class="scribble" viewBox="0 0 300 40" aria-hidden="true"><path pathLength="1" d="M4 24 C 58 6, 104 36, 158 19 S 246 8, 296 21"/></svg></span></span></span>
+      </h1>
+      <div class="powered rise" style="--d:2050">
+        <span>Powered by</span>
+        <img src="img/logos/tieto.svg" alt="Tieto" style="--h:26px">
+        <img src="img/logos/gemini.svg" alt="Google Gemini" style="--h:28px">
+        <img src="img/logos/craci.svg" alt="CRACI" style="--h:22px">
+        <img src="img/logos/aiven.svg" alt="Aiven" style="--h:30px">
+        <img src="img/logos/nvidia.svg" alt="NVIDIA" style="--h:22px">
+      </div>
+      <div class="team rise" style="--d:1900">Niek Adams <i>/</i> Elin Lucia Dobrostal <i>/</i> Timo Gültzow <i>/</i> Stepan Konoplianko</div>
+    </div>
+    <aside class="notes" data-time="0:10">
+      Every claim cites its evidence. Every AI reviewer is tested. Every human approval is tested too.
+      Test the reviewer. Then sign. Thank you.
+    </aside>
+  </section>
+
+  <!-- Presenter chrome: progress, timer, notes. Never printed. -->
+  <div class="hud" aria-hidden="true">
+    <div class="progress"><i id="bar"></i></div>
+    <div class="timer" id="timer" hidden>3:00</div>
+    <div class="notes-panel" id="notes" hidden></div>
+    <div class="help" id="help" hidden>
+      <b>Keys</b>
+      <span><kbd>→</kbd> <kbd>Space</kbd> next</span>
+      <span><kbd>←</kbd> back</span>
+      <span><kbd>F</kbd> fullscreen</span>
+      <span><kbd>N</kbd> speaker notes</span>
+      <span><kbd>T</kbd> 3-minute timer</span>
+      <span><kbd>P</kbd> save as PDF</span>
+      <span><kbd>?</kbd> this help</span>
+    </div>
+  </div>
+</main>
+
+<script src="deck.js"></script>
+</body>
+</html>
