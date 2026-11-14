@@ -1,15 +1,17 @@
-import { motion } from "motion/react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { DiffView, type Mark } from "./DiffView";
-import { COLUMN, fileName, objectiveName, prettyModel, sameFile } from "./lib";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { Brief, Dots, type BriefNode, type BriefTask } from "./Brief";
+import { Changes, layoutChanges, type Cite, type Lens } from "./Changes";
+import { ArrowLeft, ArrowRight, ArrowUpRight, CheckIcon, SkipIcon, XIcon } from "./icons";
+import { fileName, lineRange, objectiveName, plural, prettyModel, sameFile, shortModel } from "./lib";
+import { Prose, inline } from "./Prose";
 import {
   buildSteps,
   clearSaved,
-  findFile,
   freshProgress,
   isBlank,
   openProgress,
-  pointCards,
   stepLabel,
   stepState,
   storageKey,
@@ -24,14 +26,15 @@ import {
 } from "./progress";
 import { ReviewerTest } from "./ReviewerTest";
 import { SignOffStep } from "./SignOff";
-import { StepNav, type View } from "./StepNav";
-import { Choice, FindingsBody, PointBody, SpotsBody } from "./StepPanel";
-import type { Exam, Reviewer, SignOff, SpotVerdict } from "./types";
+import { StepBar } from "./StepBar";
+import type { Exam, Plant, Reviewer, SignOff, SpotVerdict } from "./types";
 
-const TONE_TEXT: Record<Tone, string> = { verified: "text-caught", unproven: "text-ink", risk: "text-missed" };
+const TONE_TEXT: Record<Tone, string> = { verified: "text-caught", unproven: "text-soft", risk: "text-missed" };
 
 /** How long a finished step stays on screen before the next step opens by itself. */
-const ADVANCE_MS = 700;
+const ADVANCE_MS = 450;
+
+const EASE = [0.25, 0.1, 0.25, 1] as const;
 
 /** Sets an answer, or takes it back when the same answer is pressed again. */
 function toggled<T extends string>(record: Record<string, T>, id: string, value: T): Record<string, T> {
@@ -41,33 +44,51 @@ function toggled<T extends string>(record: Record<string, T>, id: string, value:
   return next;
 }
 
-/** How many separate places the AI reviewer cites as evidence for an objective. */
-function citedCount(step: PointStep): number {
-  return pointCards(step).filter((card) => card.cited).length;
+const lines = (start: number, end: number) => (end > start ? `lines ${lineRange(start, end)}` : `line ${start}`);
+
+const overlaps = (a: { file: string; line_start: number; line_end: number }, b: { file: string; line_start: number; line_end: number }) =>
+  sameFile(a.file, b.file) && a.line_start <= b.line_end && a.line_end >= b.line_start;
+
+/** What the person reads in the change for one step: the cited lines, the blind spots, the reported problems. */
+function lensFor(step: Step, exam: Exam, reviewer: Reviewer): Lens | null {
+  const model = shortModel(reviewer.name);
+  const missedAt = (plant: Plant) => {
+    const at = exam.plants.filter((other) => other.kind !== "harmless" && reviewer.results[other.id] === "missed" && overlaps(other, plant));
+    return at.length > 0 ? at : [plant];
+  };
+  switch (step.kind) {
+    case "point": {
+      const { point } = step;
+      const objective = objectiveName(point.id);
+      const cites: Cite[] = point.evidence.map((evidence) => {
+        const aimed = exam.plants.filter((plant) => plant.kind !== "harmless" && plant.breaks === point.id && overlaps(plant, evidence));
+        const caught = aimed.filter((plant) => reviewer.results[plant.id] === "caught").length;
+        const missed = aimed.filter((plant) => reviewer.results[plant.id] === "missed").length;
+        return {
+          file: evidence.file,
+          start: evidence.line_start,
+          end: evidence.line_end,
+          planted: aimed.length,
+          caught,
+          // Two different answers to the same review mean nothing held up, whatever was caught.
+          outcome: missed > 0 ? "missed" : caught > 0 && point.noticed !== "unstable" ? "held" : "untested",
+        };
+      });
+      return { objective, model, cites, blind: step.spots, missedAt, findings: [], quiet: `not cited for ${objective}`, readAll: cites.length === 0 };
+    }
+    case "spots":
+      return { objective: null, model, cites: [], blind: step.spots, missedAt, findings: [], quiet: "no blind spot", readAll: false };
+    case "findings":
+      return { objective: null, model, cites: [], blind: [], missedAt, findings: step.findings.map((finding, index) => ({ index, finding })), quiet: "nothing reported", readAll: false };
+    default:
+      return null;
+  }
 }
 
-/** What the person does on an objective, as numbered actions with nothing left to interpret. */
-function auditTasks(step: PointStep): string[] {
+/** The question in the floating bar: exactly what the person rules on. */
+function auditQuestion(step: PointStep, cited: number): string {
   const objective = objectiveName(step.point.id);
-  const cited = citedCount(step);
-  const tasks: string[] = [];
-  if (step.spots.length > 0) {
-    tasks.push(`Judge the real code at ${step.spots.length === 1 ? "the red line" : `each of the ${step.spots.length} red lines`}.`);
-  }
-  if (step.claimsMet && cited > 0) {
-    tasks.push(`Read the ${cited === 1 ? "cited reference" : `${cited} cited references`}.`);
-    tasks.push(`Decide whether the cited code proves that the change meets ${objective}.`);
-  } else {
-    tasks.push("Read the full change.");
-    tasks.push(`Decide whether the change meets ${objective}.`);
-  }
-  return tasks;
-}
-
-/** The question in the bottom bar: exactly what the person rules on. */
-function auditQuestion(step: PointStep): string {
-  const objective = objectiveName(step.point.id);
-  return step.claimsMet && citedCount(step) > 0 ? `Does the cited code prove that the change meets ${objective}?` : `Does the change meet ${objective}?`;
+  return step.claimsMet && cited > 0 ? `Does the cited code prove that the change meets ${objective}?` : `Does the change meet ${objective}?`;
 }
 
 /** The one instruction under the title of a step that is not an objective. */
@@ -75,11 +96,11 @@ function stepTask(step: Step, exam: Exam, reviewer: Reviewer): string {
   const model = prettyModel(reviewer.name);
   switch (step.kind) {
     case "intro":
-      return `An AI agent wrote the pull request. ${model} reviewed the pull request against the requirement (issue ${exam.change.requirement_id}). You check whether the review by ${model} can be trusted, then you sign.`;
+      return `An AI agent wrote the pull request. ${model} reviewed it against the requirement (issue ${exam.change.requirement_id}). We tested ${shortModel(reviewer.name)} by planting mistakes in copies of the change. You check whether its review can be trusted, then you sign.`;
     case "spots":
-      return "The code below is the real code. In test copies, the AI reviewer missed a planted mistake at each red line. Judge whether the real code at each red line is correct.";
+      return "In test copies, the AI reviewer missed a planted mistake at each of these lines. The code below is the real code. Judge whether it is correct.";
     case "findings":
-      return "The AI reviewer reported the problems below in the real code. Judge whether each reported problem is real.";
+      return "The AI reviewer reported these problems in the real code. Judge whether each one is real.";
     case "sign":
       return "Decide on the pull request and put your name on the decision.";
     case "point":
@@ -87,27 +108,81 @@ function stepTask(step: Step, exam: Exam, reviewer: Reviewer): string {
   }
 }
 
-function Row({ term, children }: { term: string; children: React.ReactNode }) {
+/** A requirement, beside the page. */
+function RequirementSheet({ exam, onClose }: { exam: Exam; onClose: () => void }) {
+  const reduced = useReducedMotion() ?? false;
+  const close = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    close.current?.focus();
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const totals = exam.change.files.reduce((sum, item) => ({ added: sum.added + item.added, removed: sum.removed + item.removed }), { added: 0, removed: 0 });
+  const body = exam.change.requirement_text.split("\n").slice(1).join("\n").replace(/^\s*Source:.*$/m, "").trim();
+  const source = /^\s*Source:\s*(\S+)/m.exec(exam.change.requirement_text)?.[1];
   return (
-    <div className="grid grid-cols-[8.5rem_minmax(0,1fr)] gap-x-3">
-      <dt className="text-[12.5px] font-bold text-soft">{term}</dt>
-      <dd>{children}</dd>
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-labelledby="requirement-title">
+      <motion.div
+        className="absolute inset-0 bg-ink/20"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: reduced ? 0 : 0.18 }}
+        onClick={onClose}
+      />
+      <motion.aside
+        initial={reduced ? { opacity: 0 } : { x: "100%" }}
+        animate={reduced ? { opacity: 1 } : { x: 0 }}
+        exit={reduced ? { opacity: 0 } : { x: "100%" }}
+        transition={{ type: "spring", stiffness: 380, damping: 38 }}
+        className="absolute inset-y-2 right-2 flex w-[min(40rem,calc(100vw-1rem))] flex-col overflow-hidden rounded-2xl border border-hair bg-panel shadow-[var(--shadow-pop)]"
+      >
+        <header className="flex items-start gap-3 border-b border-hair px-6 py-4">
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] text-soft">
+              Requirement · issue {exam.change.requirement_id}
+              {source && (
+                <>
+                  {" · "}
+                  <a href={source} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-link hover:underline">
+                    Open the issue <ArrowUpRight size={13} />
+                  </a>
+                </>
+              )}
+            </p>
+            <h2 id="requirement-title" className="mt-1 text-[18px] font-semibold leading-snug">
+              {exam.change.requirement_title}
+            </h2>
+            <p className="mt-1 text-[13px] text-soft">
+              An AI agent wrote the pull request to resolve the issue: {plural(exam.change.files.length, "file")},{" "}
+              <span className="text-caught">+{totals.added}</span> <span className="text-missed">−{totals.removed}</span>. The review objectives come from the issue text.
+            </p>
+          </div>
+          <button ref={close} type="button" onClick={onClose} className="btn h-8 w-8 shrink-0 !p-0" aria-label="Close">
+            <XIcon size={16} />
+          </button>
+        </header>
+        <div className="thin-scroll min-h-0 flex-1 overflow-y-auto px-6 py-4">
+          <Prose text={body} />
+        </div>
+      </motion.aside>
     </div>
   );
 }
 
 /**
- * One pull request as a guided audit of its AI review: the step being worked on in a centred
- * column, and a bottom bar with the progress indicator and the question of the step. It is
- * remounted when the code or the AI reviewer changes, so checks never carry over to something
- * the person has not looked at.
+ * One pull request as a guided audit of its AI review. The step being worked on fills the panel,
+ * how the step got here sits in the side bar, and the question of the step floats at the bottom.
+ * It is remounted when the code or the AI reviewer changes, so checks never carry over to
+ * something the person has not looked at.
  */
 export function Workspace({
   exam,
   reviewer,
   code,
   signoffs,
-  header,
+  briefSlot,
   onSign,
   onSaved,
 }: {
@@ -116,24 +191,23 @@ export function Workspace({
   /** Fingerprint of the code on screen. */
   code: string;
   signoffs: SignOff[];
-  header: React.ReactNode;
+  /** Where the side bar wants the audit brief. */
+  briefSlot: HTMLElement | null;
   onSign: (name: string, decision: string, spots: { plant_id: string; verdict: SpotVerdict }[]) => Promise<void>;
   /** Called after the saved checks change, so the list of pull requests can show progress. */
   onSaved: () => void;
 }) {
+  const reduced = useReducedMotion() ?? false;
   const key = storageKey(exam.change.id, reviewer.name);
   const steps = useMemo(() => buildSteps(exam, reviewer), [exam, reviewer]);
   const [opened] = useState(() => openProgress(key, reviewer.run_file, code));
   const [progress, setProgress] = useState<Progress>(opened.progress);
   const [stale, setStale] = useState(opened.stale);
-  const [view, setView] = useState<View>("step");
-  const [filePath, setFilePath] = useState<string | null>(() => {
-    // Open the whole change on the file the planted edits live in: that is the one worth reading.
-    const planted = exam.plants[0]?.file;
-    return exam.change.files.find((file) => file.path === planted)?.path ?? exam.change.files[0]?.path ?? null;
-  });
-  const [focus, setFocus] = useState<{ line: number; token: number } | null>(null);
+  const [jump, setJump] = useState<{ id: string; token: number } | null>(null);
+  const [showRequirement, setShowRequirement] = useState(false);
+  const scroller = useRef<HTMLDivElement>(null);
 
+  const model = shortModel(reviewer.name);
   const mine = signoffs.filter((entry) => entry.reviewer === reviewer.name);
   const signed = mine[mine.length - 1] ?? null;
   const states: StepState[] = steps.map((item) => stepState(item, progress, signed));
@@ -142,6 +216,10 @@ export function Workspace({
   const step = steps[index];
   const state = states[index];
   const label = stepLabel(step);
+
+  const lens = useMemo(() => lensFor(step, exam, reviewer), [step, exam, reviewer]);
+  const layout = useMemo(() => (lens ? layoutChanges(exam.change.files, lens) : null), [exam, lens]);
+  const citedBlocks = useMemo(() => (layout ? layout.files.flatMap((item) => item.blocks).filter((block) => block.cites.length > 0) : []), [layout]);
 
   // Checks made on older code or older results are gone for good, not kept for a later visit.
   useEffect(() => {
@@ -157,46 +235,21 @@ export function Workspace({
     onSaved();
   }, [progress, opened, key, done, steps.length, onSaved]);
 
+  // A new step starts at its top.
+  useEffect(() => {
+    scroller.current?.scrollTo({ top: 0 });
+  }, [step.id]);
+
   const check = (change: (current: Progress) => Partial<Progress>) => {
     setStale(false);
     setProgress((current) => ({ ...current, ...change(current) }));
   };
-  const goTo = (stepId: string) => {
-    setProgress((current) => ({ ...current, step: stepId }));
-    setView("step");
-  };
+  const goTo = (stepId: string) => setProgress((current) => ({ ...current, step: stepId }));
   const onSpot = (plantId: string, verdict: SpotVerdict) => check((current) => ({ spots: toggled(current.spots, plantId, verdict) }));
-  const onPoint = (pointId: string, answer: PointAnswer) => check((current) => ({ points: toggled(current.points, pointId, answer) }));
   const onFinding = (findingId: string, answer: FindingAnswer) => check((current) => ({ findings: toggled(current.findings, findingId, answer) }));
+  const jumpTo = (id: string) => setJump({ id, token: Date.now() });
 
-  const showInWhole = (path: string, line: number) => {
-    const target = findFile(exam.change.files, path);
-    if (!target) return;
-    setFilePath(target.path);
-    setFocus({ line, token: Date.now() });
-    setView("whole");
-  };
-
-  const file = exam.change.files.find((item) => item.path === filePath) ?? null;
-  const marks = useMemo<Mark[]>(() => {
-    if (!file) return [];
-    const blind: Mark[] = exam.plants
-      .filter((plant) => reviewer.read_yourself.includes(plant.id) && sameFile(file.path, plant.file))
-      .map((plant) => ({ start: plant.line_start, end: plant.line_end, tone: "blind" }));
-    const found: Mark[] = reviewer.findings
-      .filter((finding) => sameFile(file.path, finding.file))
-      .map((finding) => ({ start: finding.line_start, end: finding.line_end, tone: "finding" }));
-    const cited: Mark[] =
-      step.kind === "point"
-        ? step.point.evidence
-            .filter((evidence) => sameFile(file.path, evidence.file))
-            .map((evidence) => ({ start: evidence.line_start, end: evidence.line_end, tone: "evidence", label: `Evidence for ${objectiveName(step.point.id)}` }))
-        : [];
-    return [...blind, ...found, ...cited];
-  }, [exam, reviewer, file, step]);
-
-  const spotsLeft = step.kind === "point" || step.kind === "spots" ? step.spots.filter((plant) => !progress.spots[plant.id]).length : 0;
-  const shared = { files: exam.change.files, progress, onOpen: showInWhole, onSpot };
+  const spotsLeft = step.kind === "point" || step.kind === "spots" ? step.spots.filter((plant) => !progress.spots[plant.id]) : [];
 
   // Finishing a step opens the next unfinished one by itself, after a moment to see the answer land.
   const nextOpen = steps.slice(index + 1).find((_, offset) => !states[index + 1 + offset].done) ?? steps[steps.length - 1];
@@ -212,195 +265,382 @@ export function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step.id, state.done]);
 
+  /** The verdict on an objective. On a step already done, the press also moves on. */
+  const answer = (value: PointAnswer) => {
+    if (step.kind !== "point" || spotsLeft.length > 0) return;
+    const wasDone = state.done;
+    check((current) => ({ points: { ...current.points, [step.point.id]: value } }));
+    if (wasDone) window.setTimeout(() => goTo(nextOpen.id), ADVANCE_MS);
+  };
+
+  const start = () => {
+    if (!progress.intro) check(() => ({ intro: true }));
+    goTo(nextOpen.id);
+  };
+
+  // Y and N answer the question of an objective; Enter starts the audit.
+  const keys = useRef({ answer, start, step, spotsLeft: spotsLeft.length });
+  keys.current = { answer, start, step, spotsLeft: spotsLeft.length };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.defaultPrevented) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.closest("input, textarea, select, [contenteditable=true]") || target.closest("[role=dialog]"))) return;
+      const { step: current, spotsLeft: left } = keys.current;
+      if (current.kind === "point" && left === 0) {
+        if (event.key === "y" || event.key === "Y") keys.current.answer("met");
+        if (event.key === "n" || event.key === "N") keys.current.answer("not_met");
+      }
+      if (current.kind === "intro" && event.key === "Enter" && !(target && target.closest("button, a"))) keys.current.start();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const clear = () => {
     setStale(false);
     setProgress(freshProgress(reviewer.run_file, code));
-    setView("step");
   };
 
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-panel">
-      <div className="border-b border-hair">
-        <div className={`${COLUMN} pb-5 pt-4`}>
-          {header}
-          {stale && (
-            <p role="status" className="mt-3 rounded-md bg-warn-wash px-3 py-1.5 text-[12.5px] font-medium">
-              The code or the results of the AI reviewer changed since your last visit. Your earlier audit was cleared.
-            </p>
-          )}
+  const closeRequirement = useCallback(() => setShowRequirement(false), []);
 
-          {step.kind === "point" ? (
-            <div className="mt-5 grid gap-x-10 gap-y-4 lg:grid-cols-[minmax(0,30rem)_minmax(0,1fr)]">
-              <div>
-                <p className="text-[12px] font-bold uppercase tracking-[0.08em] text-soft">
-                  {label.eyebrow} · step {index + 1} of {steps.length}
-                </p>
-                {/* Long objectives stay readable at about eight words a line. */}
-                <h1 className="mt-1.5 text-[17px] font-bold leading-snug">{label.title}</h1>
-              </div>
-              <dl className="space-y-2.5 text-[13.5px] leading-snug">
-                <Row term="AI reviewer claims">
-                  <span className="font-bold">{step.claim}</span>
-                  {step.point.reason && (
-                    <details className="group mt-0.5 text-[12.5px] text-soft">
-                      <summary className="cursor-pointer list-none text-faint hover:text-ink">
-                        <span className="group-open:hidden">Show the reasoning of the AI reviewer</span>
-                        <span className="hidden group-open:inline">Hide the reasoning of the AI reviewer</span>
-                      </summary>
-                      <p className="mt-1 border-l-2 border-hair pl-3">“{step.point.reason}”</p>
-                    </details>
-                  )}
-                </Row>
-                <Row term="Test of the claim">
-                  <span className={`font-bold ${TONE_TEXT[step.tone]}`}>{step.test.verdict}.</span> {step.test.detail}
-                </Row>
-                <Row term="Your audit">
-                  <ol className="list-decimal space-y-0.5 pl-4 font-medium">
-                    {auditTasks(step).map((task) => (
-                      <li key={task}>{task}</li>
-                    ))}
-                  </ol>
-                </Row>
-              </dl>
-            </div>
-          ) : (
-            <div className="mt-5">
-              <p className="text-[12px] font-bold uppercase tracking-[0.08em] text-soft">
-                {label.eyebrow} · step {index + 1} of {steps.length}
-              </p>
-              <h1 className="mt-1.5 text-[22px] font-extrabold leading-tight tracking-tight">{label.title}</h1>
-              <p className="mt-2 max-w-[44rem] text-[14px] leading-snug">{stepTask(step, exam, reviewer)}</p>
-            </div>
+  // ---- The audit brief in the side bar ----
+  const counts = reviewer.counts;
+  const defectResults = exam.plants
+    .filter((plant) => plant.kind !== "harmless")
+    .map((plant) => (reviewer.results[plant.id] === "caught" ? "caught" : reviewer.results[plant.id] === "missed" ? "missed" : "other") as "caught" | "missed" | "other");
+  const verdictTitle = reviewer.review_failed
+    ? "Gave no usable answer"
+    : reviewer.verdict === true
+      ? "Says the change meets the requirement"
+      : reviewer.verdict === false
+        ? "Says the change does not meet the requirement"
+        : "Could not tell";
+  const aiOverall: BriefNode = {
+    who: "ai",
+    meta: `${model} · AI reviewer`,
+    title: verdictTitle,
+    detail: reviewer.review_failed
+      ? "Treat the pull request as unreviewed."
+      : reviewer.findings.length > 0
+        ? `Reported ${plural(reviewer.findings.length, "problem")} in the real code.`
+        : "Reported no problems. The verdict is an opinion, not proof.",
+  };
+  const examinerOverall: BriefNode = {
+    who: "examiner",
+    meta: "Examiner AI · our test",
+    title:
+      counts.defects_total > 0 ? (
+        <span className={counts.defects_caught === counts.defects_total ? "text-caught" : "text-missed"}>
+          Noticed {counts.defects_caught} of {plural(counts.defects_total, "planted mistake")}
+        </span>
+      ) : (
+        <span className="text-soft">Could not be tested</span>
+      ),
+    detail:
+      counts.defects_total > 0 ? (
+        <>
+          <Dots results={defectResults} />
+          {counts.harmless_total > 0 && (
+            <span className="mt-1.5 block">
+              {counts.false_alarms === 0 ? "No false alarm" : plural(counts.false_alarms, "false alarm")} on {plural(counts.harmless_total, "harmless edit")}.
+            </span>
           )}
-        </div>
+        </>
+      ) : undefined,
+  };
+  const spotTask = (plant: Plant): BriefTask => ({
+    text: `Judge the blind spot, ${lines(plant.line_start, plant.line_end)}`,
+    done: progress.spots[plant.id] != null,
+    flagged: progress.spots[plant.id] === "wrong",
+    onClick: () => jumpTo(`spot-${plant.id}`),
+  });
+
+  let nodes: BriefNode[];
+  if (step.kind === "point") {
+    const { point } = step;
+    const objective = objectiveName(point.id);
+    const answerNow = progress.points[point.id];
+    const tasks: BriefTask[] = [];
+    if (citedBlocks.length > 0) tasks.push({ text: `Read the ${plural(citedBlocks.length, "cited block")}`, onClick: () => jumpTo(citedBlocks[0].id) });
+    else tasks.push({ text: "Read the full change", onClick: () => layout?.files[0]?.blocks[0] && jumpTo(layout.files[0].blocks[0].id) });
+    tasks.push(...step.spots.map(spotTask));
+    tasks.push({ text: `Decide whether ${objective} was met`, done: answerNow != null, flagged: answerNow === "not_met" });
+    const results: ("caught" | "missed")[] = [
+      ...Array<"caught">(point.broken_noticed).fill("caught"),
+      ...Array<"missed">(Math.max(0, point.broken_total - point.broken_noticed)).fill("missed"),
+    ];
+    nodes = [
+      {
+        who: "ai",
+        meta: `${model} · AI reviewer`,
+        title: point.status === "met" ? `Claims ${objective} is met` : point.status === "not_met" ? `Claims ${objective} is not met` : `Could not decide ${objective}`,
+        fold: point.reason ? { label: "Read full reasoning", body: `“${point.reason}”` } : undefined,
+      },
+      {
+        who: "examiner",
+        meta: "Examiner AI · our test",
+        title: (
+          <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <span className={TONE_TEXT[step.tone]}>{step.test.verdict}</span>
+            {results.length > 0 && <Dots results={results} />}
+          </span>
+        ),
+        detail: step.test.detail,
+      },
+      { who: "you", meta: "You · auditor", title: "Audit the claim", tasks },
+    ];
+  } else if (step.kind === "spots") {
+    nodes = [
+      { who: "ai", meta: `${model} · AI reviewer`, title: `Missed ${plural(step.spots.length, "planted mistake")}`, detail: "At lines that belong to no single objective." },
+      { who: "examiner", meta: "Examiner AI · our test", title: <span className="text-missed">Blind spots</span>, detail: "We planted them in test copies. None is in the real code." },
+      { who: "you", meta: "You · auditor", title: "Judge the real code", tasks: step.spots.map(spotTask) },
+    ];
+  } else if (step.kind === "findings") {
+    nodes = [
+      { who: "ai", meta: `${model} · AI reviewer`, title: `Reported ${plural(step.findings.length, "problem")}` },
+      { who: "examiner", meta: "Examiner AI · our test", title: <span className="text-soft">Not tested</span>, detail: "We test claims, not reported problems." },
+      {
+        who: "you",
+        meta: "You · auditor",
+        title: "Judge each problem",
+        tasks: step.findings.map((finding, number) => ({
+          text: `${fileName(finding.file)}, ${lines(finding.line_start, finding.line_end)}`,
+          done: progress.findings[String(number)] != null,
+          flagged: progress.findings[String(number)] === "real",
+          onClick: () => jumpTo(`finding-${number}`),
+        })),
+      },
+    ];
+  } else if (step.kind === "sign") {
+    const flagged = states.filter((item) => item.flagged).length;
+    nodes = [
+      aiOverall,
+      examinerOverall,
+      {
+        who: "you",
+        meta: "You · auditor",
+        title: "Sign the audit",
+        tasks: [
+          { text: `${done - (signed ? 1 : 0)} of ${steps.length - 1} steps done`, done: done - (signed ? 1 : 0) === steps.length - 1 },
+          ...(flagged > 0 ? [{ text: `${plural(flagged, "step")} marked wrong`, flagged: true }] : []),
+          { text: "Accept, ask for a full read, or reject", done: signed != null },
+        ],
+      },
+    ];
+  } else {
+    const objectives = steps.filter((item) => item.kind === "point").length;
+    const blind = reviewer.read_yourself.length;
+    nodes = [
+      aiOverall,
+      examinerOverall,
+      {
+        who: "you",
+        meta: "You · auditor",
+        title: "Audit the review",
+        tasks: [
+          ...(objectives > 0 ? [{ text: `Audit ${plural(objectives, "review objective")}` }] : []),
+          ...(blind > 0 ? [{ text: `Judge ${plural(blind, "blind spot")}` }] : []),
+          ...(reviewer.findings.length > 0 ? [{ text: `Judge ${plural(reviewer.findings.length, "reported problem")}` }] : []),
+          { text: "Sign: accept, ask for a full read, or reject" },
+        ],
+      },
+    ];
+  }
+
+  // ---- The floating question bar ----
+  const next = stepLabel(nextOpen);
+  let question: ReactNode = null;
+  let actions: ReactNode = null;
+  let questionKey = step.id;
+  if (step.kind === "intro") {
+    questionKey = "intro";
+    question = <>The audit has {plural(steps.length - 2, "step")} before you sign.</>;
+    actions = (
+      <button type="button" onClick={start} className="btn btn-dark h-9 px-3.5 text-[14px]">
+        {progress.intro ? "Continue the audit" : "Start the audit"}
+        <ArrowRight size={15} />
+      </button>
+    );
+  } else if (step.kind === "point") {
+    const chosen = progress.points[step.point.id];
+    const blocked = spotsLeft.length > 0;
+    questionKey = blocked ? `${step.id}-spots` : `${step.id}-ask`;
+    question = blocked ? (
+      <button type="button" onClick={() => jumpTo(`spot-${spotsLeft[0].id}`)} className="inline-flex items-center gap-2 text-left hover:underline">
+        <i className="inline-block h-2 w-2 shrink-0 rounded-full bg-missed" aria-hidden="true" />
+        First judge the blind spot at {lines(spotsLeft[0].line_start, spotsLeft[0].line_end)}
+      </button>
+    ) : (
+      auditQuestion(step, citedBlocks.length)
+    );
+    actions = (
+      <>
+        <button
+          type="button"
+          disabled={blocked}
+          onClick={() => answer("not_met")}
+          aria-pressed={chosen === "not_met"}
+          className={`btn h-9 px-3 text-[14px] ${chosen === "not_met" ? "!border-missed/40 !bg-missed-wash !text-missed" : ""}`}
+        >
+          {chosen === "not_met" && <XIcon size={14} />}
+          No
+          <span className="kbd">N</span>
+        </button>
+        <button type="button" disabled={blocked} onClick={() => answer("met")} aria-pressed={chosen === "met"} className="btn btn-dark h-9 px-3 text-[14px]">
+          {chosen === "met" && <CheckIcon size={14} />}
+          {nextOpen.kind === "sign" ? "Yes, then sign" : nextOpen.id === step.id ? "Yes" : `Yes, next ${next.short}`}
+          <span className="kbd">Y</span>
+        </button>
+      </>
+    );
+  } else if (step.kind === "spots" || step.kind === "findings") {
+    questionKey = `${step.id}-${state.done}`;
+    question = state.done ? (
+      <span className="inline-flex items-center gap-2 text-caught">
+        <CheckIcon size={15} /> Step done
+      </span>
+    ) : step.kind === "spots" ? (
+      `Judge ${spotsLeft.length === 1 ? "the blind spot" : `the ${spotsLeft.length} blind spots`} above.`
+    ) : (
+      "Judge every reported problem above."
+    );
+    actions = state.done ? (
+      <button type="button" onClick={() => goTo(nextOpen.id)} className="btn btn-dark h-9 px-3.5 text-[14px]">
+        Next: {next.short}
+        <ArrowRight size={15} />
+      </button>
+    ) : null;
+  }
+
+  const showBar = step.kind !== "sign";
+  const title = step.kind === "point" ? inline(step.point.text) : step.kind === "intro" ? `You are auditing ${prettyModel(reviewer.name)}` : label.title;
+
+  const brief = (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div key={step.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }}>
+        <Brief nodes={nodes} />
+      </motion.div>
+    </AnimatePresence>
+  );
+
+  return (
+    <div className="relative h-full">
+      {briefSlot && createPortal(brief, briefSlot)}
+
+      <div ref={scroller} className="thin-scroll h-full overflow-y-auto">
+        {/* The step bar stays in reach while the person scrolls through the code. */}
+        <header className="sticky top-0 z-10 bg-white/85 px-6 pb-3 pt-4 backdrop-blur-md sm:px-10">
+          <StepBar steps={steps} states={states} current={step.id} onGoTo={goTo} />
+        </header>
+        {stale && (
+          <p role="status" className="mx-6 mt-2 rounded-lg bg-warn-wash px-3 py-2 text-[13px] sm:mx-10">
+            The code or the results of the AI reviewer changed since your last visit. Your earlier audit was cleared.
+          </p>
+        )}
+
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={step.id}
+            initial={{ opacity: 0, y: reduced ? 0 : 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: reduced ? 0 : -4 }}
+            transition={{ duration: 0.18, ease: EASE }}
+          >
+            <div className="border-b border-hair px-6 pb-7 pt-4 sm:px-10">
+              <p className="flex flex-wrap items-center gap-x-1.5 text-[13.5px] text-soft">
+                {label.eyebrow}
+                <span aria-hidden="true">·</span>
+                <button type="button" onClick={() => setShowRequirement(true)} className="inline-flex items-center gap-0.5 text-link hover:underline">
+                  Read the requirement (issue {exam.change.requirement_id})
+                  <ArrowUpRight size={14} />
+                </button>
+              </p>
+              <h1 className="mt-2 max-w-[60rem] text-[18px] font-semibold leading-[1.3] tracking-[-0.01em] sm:text-[22px]">{title}</h1>
+              {step.kind !== "point" && <p className="mt-2 max-w-[46rem] text-[14px] leading-relaxed text-soft">{stepTask(step, exam, reviewer)}</p>}
+            </div>
+
+            <div className="px-6 pb-36 pt-7 sm:px-10">
+              {step.kind === "intro" ? (
+                <ReviewerTest exam={exam} reviewer={reviewer} />
+              ) : step.kind === "sign" ? (
+                <SignOffStep
+                  steps={steps.slice(0, -1)}
+                  states={states.slice(0, -1)}
+                  mine={mine}
+                  onGoTo={goTo}
+                  onClear={clear}
+                  onSign={(name, decision) =>
+                    onSign(
+                      name,
+                      decision,
+                      reviewer.read_yourself.filter((id) => progress.spots[id]).map((id) => ({ plant_id: id, verdict: progress.spots[id] })),
+                    )
+                  }
+                />
+              ) : (
+                layout &&
+                lens && (
+                  <Changes
+                    layout={layout}
+                    lens={lens}
+                    spots={progress.spots}
+                    findingAnswers={progress.findings}
+                    onSpot={onSpot}
+                    onFinding={onFinding}
+                    jump={jump}
+                  />
+                )
+              )}
+            </div>
+          </motion.div>
+        </AnimatePresence>
       </div>
 
-      {view === "whole" ? (
-        <div className="flex min-h-0 flex-1 flex-col bg-canvas">
-          <div className={`${COLUMN} flex min-h-0 flex-1 flex-col py-4`}>
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border-2 border-ink bg-panel">
-              <div className="thin-scroll flex gap-1 overflow-x-auto border-b border-hair px-3 py-2" role="tablist" aria-label="Files in the change">
-                {exam.change.files.map((item) => {
-                  const toRead = exam.plants.filter((plant) => plant.file === item.path && reviewer.read_yourself.includes(plant.id)).length;
-                  const active = item.path === file?.path;
-                  return (
-                    <button
-                      key={item.path}
-                      role="tab"
-                      type="button"
-                      aria-selected={active}
-                      title={item.path}
-                      onClick={() => {
-                        setFilePath(item.path);
-                        setFocus(null);
-                      }}
-                      className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 font-mono text-[12px] font-bold ${
-                        active ? "bg-ink text-white" : "text-soft hover:bg-canvas hover:text-ink"
-                      }`}
-                    >
-                      {fileName(item.path)}
-                      {toRead > 0 && <span className="rounded-sm bg-missed px-1 font-sans text-[10.5px] text-white">{toRead}</span>}
-                    </button>
-                  );
-                })}
-              </div>
-              {file && <DiffView file={file} marks={marks} focus={focus?.line ?? null} key={`${file.path}-${focus?.token ?? 0}`} className="min-h-0 flex-1" />}
-            </div>
-          </div>
-        </div>
-      ) : step.kind === "intro" ? (
-        <ReviewerTest exam={exam} reviewer={reviewer} steps={steps} />
-      ) : step.kind === "point" ? (
-        <PointBody key={step.id} step={step} {...shared} onWholeChange={() => setView("whole")} />
-      ) : step.kind === "spots" ? (
-        <SpotsBody spots={step.spots} {...shared} />
-      ) : step.kind === "findings" ? (
-        <FindingsBody findings={step.findings} files={exam.change.files} progress={progress} onOpen={showInWhole} onFinding={onFinding} />
-      ) : (
-        <SignOffStep
-          steps={steps.slice(0, -1)}
-          states={states.slice(0, -1)}
-          mine={mine}
-          onGoTo={goTo}
-          onClear={clear}
-          onSign={(name, decision) =>
-            onSign(
-              name,
-              decision,
-              reviewer.read_yourself.filter((id) => progress.spots[id]).map((id) => ({ plant_id: id, verdict: progress.spots[id] })),
-            )
-          }
-        />
-      )}
-
-      <div className="border-t-2 border-ink bg-panel">
-        <div className={`${COLUMN} py-3`}>
-          <StepNav steps={steps} states={states} current={step.id} view={view} onView={setView} onGoTo={goTo} />
-
-          {step.kind !== "sign" && (
-            <div className="mt-3 flex min-h-[3.25rem] flex-wrap items-center gap-x-5 gap-y-2 border-t border-hair pt-3">
-              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2">
-                {step.kind === "point" && spotsLeft === 0 && (
-                  // Unfolds once the red lines are judged, so there is one thing to do at a time.
-                  <motion.div
-                    key={step.id}
-                    initial={step.spots.length > 0 ? { opacity: 0, y: 8 } : false}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="flex flex-wrap items-center gap-x-4 gap-y-2"
-                  >
-                    <p className="text-[15px] font-bold">{auditQuestion(step)}</p>
-                    <Choice
-                      value={progress.points[step.point.id]}
-                      options={[
-                        { value: "met", label: `Yes, ${objectiveName(step.point.id)} is met`, short: "Yes", good: true },
-                        { value: "not_met", label: `No, ${objectiveName(step.point.id)} is not met`, short: "No", good: false },
-                      ]}
-                      onPick={(answer) => onPoint(step.point.id, answer)}
-                    />
-                  </motion.div>
-                )}
-                {(step.kind === "point" || step.kind === "spots") && spotsLeft > 0 && (
-                  <p className="text-[14px] font-medium">
-                    <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full bg-missed" aria-hidden="true" />
-                    {view === "whole" ? "Switch to “Review” and judge" : "First judge"} the real code at{" "}
-                    {spotsLeft === 1 ? "the red line" : `the ${spotsLeft} red lines`}.
-                  </p>
-                )}
-                {step.kind === "findings" && !state.done && <p className="text-[14px] font-medium">Judge every reported problem.</p>}
-                {state.done && (step.kind === "spots" || step.kind === "findings") && <p className="text-[14px] font-bold text-caught">✓ Step done</p>}
-              </div>
-              <div className="flex shrink-0 items-center gap-4">
+      {showBar && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 px-3 pb-3 sm:px-6 sm:pb-6">
+          <motion.div
+            initial={{ opacity: 0, y: reduced ? 0 : 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.25, ease: EASE }}
+            className="pointer-events-auto mx-auto max-w-[66rem] rounded-[18px] border-[5px] border-white/70 bg-white/80 shadow-[var(--shadow-float)] backdrop-blur-xl"
+          >
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-[13px] px-4 py-2 sm:px-5">
+              <div className="flex shrink-0 items-center gap-5 text-[14px] text-soft">
                 {index > 0 && (
-                  <button type="button" onClick={() => goTo(steps[index - 1].id)} className="text-[13px] font-medium text-soft underline-offset-2 hover:text-ink hover:underline">
+                  <button type="button" onClick={() => goTo(steps[index - 1].id)} className="inline-flex items-center gap-2 hover:text-ink">
+                    <ArrowLeft size={15} />
                     Previous step
                   </button>
                 )}
-                {step.kind === "intro" ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!progress.intro) check(() => ({ intro: true }));
-                      goTo(nextOpen.id);
-                    }}
-                    className="press rounded-md bg-warn px-4 py-2 text-[14px] font-bold"
-                  >
-                    {progress.intro ? "Continue the audit →" : "Start the audit →"}
-                  </button>
-                ) : state.done ? (
-                  <button type="button" onClick={() => goTo(nextOpen.id)} className="press rounded-md bg-warn px-4 py-2 text-[14px] font-bold">
-                    Next step →
-                  </button>
-                ) : (
-                  <button type="button" onClick={() => goTo(steps[index + 1].id)} className="text-[13px] font-medium text-soft underline-offset-2 hover:text-ink hover:underline">
+                {step.kind !== "intro" && !state.done && index < steps.length - 1 && (
+                  <button type="button" onClick={() => goTo(steps[index + 1].id)} className="inline-flex items-center gap-2 hover:text-ink">
                     Skip the step
+                    <SkipIcon size={16} />
                   </button>
                 )}
               </div>
+              <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-5 gap-y-2">
+                <AnimatePresence mode="popLayout" initial={false}>
+                  <motion.div
+                    key={questionKey}
+                    initial={{ opacity: 0, y: reduced ? 0 : 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: reduced ? 0 : -6 }}
+                    transition={{ duration: 0.16 }}
+                    className="min-w-0 text-[15.5px] font-medium leading-snug"
+                  >
+                    {question}
+                  </motion.div>
+                </AnimatePresence>
+                {actions && <div className="flex shrink-0 items-center gap-2.5">{actions}</div>}
+              </div>
             </div>
-          )}
+          </motion.div>
         </div>
-      </div>
+      )}
+
+      <AnimatePresence>{showRequirement && <RequirementSheet key="requirement" exam={exam} onClose={closeRequirement} />}</AnimatePresence>
     </div>
   );
 }

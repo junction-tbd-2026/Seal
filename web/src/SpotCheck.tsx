@@ -15,22 +15,22 @@ export function SpotCheckReveal({ result, name, onContinue }: { result: Reveal; 
   const time = seconds < 90 ? `${Math.round(seconds)} seconds` : `${Math.round(seconds / 60)} minutes`;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/70 p-4" role="dialog" aria-modal="true" aria-labelledby="spot-title">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/30 p-4 backdrop-blur-[2px]" role="dialog" aria-modal="true" aria-labelledby="spot-title">
       <motion.div
-        initial={{ scale: 0.9, opacity: 0, rotate: -1.5 }}
-        animate={{ scale: 1, opacity: 1, rotate: 0 }}
-        transition={{ type: "spring", stiffness: 260, damping: 20 }}
-        className="w-full max-w-2xl overflow-hidden rounded-xl border-[3px] border-ink bg-panel shadow-[8px_8px_0_var(--color-ink)]"
+        initial={{ scale: 0.96, opacity: 0, y: 12 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        transition={{ type: "spring", stiffness: 320, damping: 28 }}
+        className="w-full max-w-2xl overflow-hidden rounded-2xl border border-hair bg-panel shadow-[var(--shadow-pop)]"
       >
-        <div className={`border-b-[3px] border-ink px-6 py-5 ${spotted ? "bg-caught text-white" : caught ? "bg-warn text-ink" : "bg-missed text-white"}`}>
-          <p className="text-[11px] font-bold uppercase tracking-[0.14em] opacity-90">That was a spot-check</p>
-          <h2 id="spot-title" className="mt-1 text-[30px] font-extrabold leading-[1.05] tracking-tight">
+        <div className={`border-b border-hair px-6 py-5 ${spotted ? "bg-caught-soft text-caught" : caught ? "bg-warn-wash text-warn" : "bg-missed-wash text-missed"}`}>
+          <p className="text-[13px] font-medium opacity-80">That was a spot-check</p>
+          <h2 id="spot-title" className="mt-1 text-[26px] font-semibold leading-tight tracking-[-0.01em]">
             {spotted ? "You found the planted bug." : caught ? "You refused it, but missed where." : "You just approved a planted bug."}
           </h2>
         </div>
 
         <div className="space-y-4 px-6 py-5">
-          <p className="text-[15px] leading-snug">
+          <p className="text-[15px] leading-relaxed">
             {spotted ? (
               <>
                 {name}, the code you were shown was a copy with a mistake we planted, and you marked that exact spot as wrong, after {time}.
@@ -50,23 +50,23 @@ export function SpotCheckReveal({ result, name, onContinue }: { result: Reveal; 
           </p>
 
           <div>
-            <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-soft">
+            <p className="text-[13px] text-soft">
               What was planted, in {fileName(plant.file)} at line {plant.line_start}
             </p>
-            <p className="mt-1 text-[13.5px]">{plant.description}</p>
+            <p className="mt-1 text-[14px] leading-snug">{plant.description}</p>
             {plant.patch[0] && (
-              <div className="mt-2 overflow-hidden rounded-md border-2 border-ink">
-                <DiffView file={plant.patch[0]} className="max-h-44" />
+              <div className="mt-2 overflow-hidden rounded-lg border border-line">
+                <DiffView file={plant.patch[0]} className="max-h-44 py-1" />
               </div>
             )}
           </div>
 
-          <p className="rounded-md border-2 border-ink bg-warn-wash px-3 py-2 text-[13px] leading-snug">
-            <strong>Nothing was approved.</strong> The real change comes next, and only a sign-off on the real change counts. So far people
+          <p className="rounded-lg bg-canvas px-3 py-2.5 text-[13.5px] leading-snug">
+            <strong className="font-semibold">Nothing was approved.</strong> The real change comes next, and only a sign-off on the real change counts. So far people
             have caught {result.record.caught} of {result.record.checked} spot-checks.
           </p>
 
-          <button ref={button} type="button" onClick={onContinue} className="press rounded-md bg-warn px-4 py-2 text-[14px] font-bold">
+          <button ref={button} type="button" onClick={onContinue} className="btn btn-dark h-10 px-4 text-[14px]">
             Show me the real change
           </button>
         </div>
