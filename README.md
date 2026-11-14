@@ -1,4 +1,4 @@
-# Reviewer Controls (working title)
+# Seal
 
 Junction 2026 · Tieto challenge **"Earned Trust in AI Code"**
 

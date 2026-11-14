@@ -77,6 +77,25 @@ function Dropdown({
   );
 }
 
+/** The name and the seal. The seal wiggles when pointed at, because it can. */
+function Brand() {
+  const reduced = useReducedMotion() ?? false;
+  return (
+    <span className="flex shrink-0 items-center gap-2 pl-1 pr-0.5">
+      <motion.img
+        src="/seal.svg"
+        alt=""
+        width={28}
+        height={28}
+        className="h-7 w-7 drop-shadow-[0_1px_1px_rgb(0_0_0/0.06)]"
+        whileHover={reduced ? undefined : { rotate: [0, -8, 7, -4, 0], scale: 1.08 }}
+        transition={{ duration: 0.6 }}
+      />
+      <span className="hidden text-[15.5px] font-semibold tracking-[-0.01em] sm:inline">Seal</span>
+    </span>
+  );
+}
+
 /** One pull request in a list: number, title, where it stands, and how far this person got. */
 function PullRow({ pull, active, inMenu, onSelect }: { pull: Pull; active: boolean; inMenu: boolean; onSelect: () => void }) {
   const status = STATUS[pull.status];
@@ -251,7 +270,21 @@ export default function App() {
     );
   }
 
-  if (!pulls) return <main className="px-6 py-24 text-center text-soft">Loading pull requests…</main>;
+  if (!pulls)
+    return (
+      <main className="grid h-full place-items-center px-6 text-center text-soft">
+        <div>
+          <motion.img
+            src="/seal.svg"
+            alt=""
+            className="mx-auto h-14 w-14"
+            animate={reduced ? undefined : { y: [0, -5, 0] }}
+            transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+          />
+          <p className="mt-3">Loading pull requests…</p>
+        </div>
+      </main>
+    );
 
   const activeTab = hasBrief ? tab : "pulls";
 
@@ -299,11 +332,13 @@ export default function App() {
           >
             <PanelIcon size={17} />
           </button>
+          <Brand />
+          <span className="mx-1.5 hidden h-5 w-px shrink-0 bg-line sm:block" aria-hidden="true" />
           {pull && (
             <Dropdown
               label="Switch pull request"
               trigger={(open) => (
-                <span className={`flex h-8 min-w-0 items-center gap-2 rounded-lg px-2 lg:-ml-2 ${open ? "bg-subtle" : "hover:bg-subtle"}`}>
+                <span className={`flex h-8 min-w-0 items-center gap-2 rounded-lg px-2 ${open ? "bg-subtle" : "hover:bg-subtle"}`}>
                   <PullIcon size={17} className="shrink-0 text-soft" />
                   <span className="shrink-0 text-[14.5px] font-semibold">PR #{pull.number}</span>
                   <span className="min-w-0 truncate text-[14.5px] text-soft">{pull.title}</span>

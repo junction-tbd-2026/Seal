@@ -207,6 +207,13 @@ export function Workspace({
   const [jump, setJump] = useState<{ id: string; token: number } | null>(null);
   const [showRequirement, setShowRequirement] = useState(false);
   const [full, setFull] = useState<{ path: string; line: number | null } | null>(null);
+  /** The answer just given, which the next step offers to take back for a few seconds. */
+  const [undo, setUndo] = useState<{ stepId: string; pointId: string; text: string } | null>(null);
+  useEffect(() => {
+    if (!undo) return;
+    const timer = window.setTimeout(() => setUndo(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [undo]);
   const scroller = useRef<HTMLDivElement>(null);
 
   const model = shortModel(reviewer.name);
@@ -267,12 +274,37 @@ export function Workspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step.id, state.done]);
 
-  /** The verdict on an objective. On a step already done, the press also moves on. */
-  const answer = (value: PointAnswer) => {
+  const forget = (pointId: string) =>
+    check((current) => {
+      const points = { ...current.points };
+      delete points[pointId];
+      return { points };
+    });
+
+  /**
+   * The verdict on an objective. Nothing is settled before the sign-off: pressing the chosen answer
+   * again takes it back. A key only ever sets an answer, so a stray key press cannot clear one.
+   */
+  const answer = (value: PointAnswer, from: "click" | "key") => {
     if (step.kind !== "point" || spotsLeft.length > 0) return;
-    const wasDone = state.done;
-    check((current) => ({ points: { ...current.points, [step.point.id]: value } }));
-    if (wasDone) window.setTimeout(() => goTo(nextOpen.id), ADVANCE_MS);
+    const id = step.point.id;
+    if (progress.points[id] === value) {
+      if (from === "click") {
+        forget(id);
+        setUndo(null);
+      }
+      return;
+    }
+    check((current) => ({ points: { ...current.points, [id]: value } }));
+    // A first answer moves on by itself; the next step offers to take it back, in case it was a slip.
+    if (!state.done) setUndo({ stepId: step.id, pointId: id, text: `${objectiveName(id)}: ${value === "met" ? "Yes" : "No"}` });
+  };
+
+  const takeBack = () => {
+    if (!undo) return;
+    forget(undo.pointId);
+    goTo(undo.stepId);
+    setUndo(null);
   };
 
   const start = () => {
@@ -290,8 +322,8 @@ export function Workspace({
       if (target && (target.closest("input, textarea, select, [contenteditable=true]") || target.closest("[role=dialog]"))) return;
       const { step: current, spotsLeft: left } = keys.current;
       if (current.kind === "point" && left === 0) {
-        if (event.key === "y" || event.key === "Y") keys.current.answer("met");
-        if (event.key === "n" || event.key === "N") keys.current.answer("not_met");
+        if (event.key === "y" || event.key === "Y") keys.current.answer("met", "key");
+        if (event.key === "n" || event.key === "N") keys.current.answer("not_met", "key");
       }
       if (current.kind === "intro" && event.key === "Enter" && !(target && target.closest("button, a"))) keys.current.start();
     };
@@ -509,17 +541,25 @@ export function Workspace({
         <button
           type="button"
           disabled={blocked}
-          onClick={() => answer("not_met")}
+          onClick={() => answer("not_met", "click")}
           aria-pressed={chosen === "not_met"}
+          title={chosen === "not_met" ? "Press again to take your answer back" : undefined}
           className={`btn h-9 px-3 text-[14px] ${chosen === "not_met" ? "!border-missed/40 !bg-missed-wash !text-missed" : ""}`}
         >
           {chosen === "not_met" && <XIcon size={14} />}
           No
           <span className="kbd">N</span>
         </button>
-        <button type="button" disabled={blocked} onClick={() => answer("met")} aria-pressed={chosen === "met"} className="btn btn-dark h-9 px-3 text-[14px]">
+        <button
+          type="button"
+          disabled={blocked}
+          onClick={() => answer("met", "click")}
+          aria-pressed={chosen === "met"}
+          title={chosen === "met" ? "Press again to take your answer back" : undefined}
+          className="btn btn-dark h-9 px-3 text-[14px]"
+        >
           {chosen === "met" && <CheckIcon size={14} />}
-          {nextOpen.kind === "sign" ? "Yes, then sign" : nextOpen.id === step.id ? "Yes" : `Yes, next ${next.short}`}
+          {chosen || state.done ? "Yes" : nextOpen.kind === "sign" ? "Yes, then sign" : `Yes, next ${next.short}`}
           <span className="kbd">Y</span>
         </button>
       </>
@@ -659,6 +699,30 @@ export function Workspace({
                     <SkipIcon size={16} />
                   </button>
                 )}
+                {step.kind === "point" && state.done && (
+                  <button type="button" onClick={() => goTo(nextOpen.id)} className="inline-flex items-center gap-2 hover:text-ink">
+                    Next step
+                    <ArrowRight size={15} />
+                  </button>
+                )}
+                <AnimatePresence>
+                  {undo && undo.stepId !== step.id && (
+                    <motion.span
+                      key={undo.stepId}
+                      initial={{ opacity: 0, x: reduced ? 0 : -6 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.18 }}
+                      className="inline-flex h-8 items-center gap-2 rounded-lg bg-canvas px-2.5 text-[13px] text-ink"
+                    >
+                      <CheckIcon size={13} className="text-soft" />
+                      {undo.text}
+                      <button type="button" onClick={takeBack} className="font-medium text-link hover:underline">
+                        Undo
+                      </button>
+                    </motion.span>
+                  )}
+                </AnimatePresence>
               </div>
               <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-5 gap-y-2">
                 <AnimatePresence mode="popLayout" initial={false}>
