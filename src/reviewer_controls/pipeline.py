@@ -16,7 +16,7 @@ from .config import KeysFileInRepoError, MissingKeyError, load_settings, require
 from .controls import run_controls, summarise
 from .llm import ChatClient
 from .models import KIND_BUG, PLANT_KINDS
-from .planter import ModelPlanter
+from .planter import PLANT_REPLY_TOKENS, ModelPlanter
 from .reviewer import MAX_DIFF_CHARS, MAX_REPLY_TOKENS, ModelReviewer
 from .stats import floor_if_all_caught
 
@@ -24,12 +24,14 @@ DEFAULT_REPO = "work/junction26-messagepack-csharp"
 PLANTER_SETTINGS = ("PLANTER_BASE_URL", "PLANTER_MODEL", "PLANTER_API_KEY")
 
 
-def client_for(settings, prefix: str) -> ChatClient:
+def client_for(settings, prefix: str, debug_dir: Optional[str] = None) -> ChatClient:
     """Model client for one role, e.g. PLANTER, REVIEWER or REVIEWER2."""
     return ChatClient(
         require(settings, prefix + "_BASE_URL"),
         require(settings, prefix + "_MODEL"),
         require(settings, prefix + "_API_KEY"),
+        timeout=float(whole_number(settings, prefix + "_TIMEOUT_SECONDS", 600)),
+        debug_dir=debug_dir,
     )
 
 
@@ -67,6 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--requirements-dir", default="requirements", help="folder of requirement files")
     parser.add_argument("--out", default="results", help="folder for the run report and card")
     parser.add_argument("--dry-run", action="store_true", help="print the plan and settings status, then exit")
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="save every prompt and model reply to <out>/debug/ (never the keys)",
+    )
     return parser
 
 
@@ -102,12 +108,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     repo = Path(args.repo or settings.get("SAMPLE_REPO_PATH") or DEFAULT_REPO)
+    debug_dir = str(Path(args.out) / "debug") if args.debug else None
     try:
-        planter = ModelPlanter(client_for(settings, "PLANTER"), repo)
+        planter = ModelPlanter(
+            client_for(settings, "PLANTER", debug_dir), repo,
+            max_tokens=whole_number(settings, "PLANTER_MAX_TOKENS", PLANT_REPLY_TOKENS),
+        )
         reviewers = [
             (
                 ModelReviewer(
-                    client_for(settings, prefix),
+                    client_for(settings, prefix, debug_dir),
                     max_diff_chars=whole_number(settings, prefix + "_MAX_DIFF_CHARS", MAX_DIFF_CHARS),
                     max_tokens=whole_number(settings, prefix + "_MAX_TOKENS", MAX_REPLY_TOKENS),
                 ),

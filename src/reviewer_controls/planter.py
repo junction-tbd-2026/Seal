@@ -16,7 +16,10 @@ from .models import KIND_BUG, KIND_HARMLESS, KIND_OMISSION, Change, Plant
 
 EXCERPT_CONTEXT_LINES = 30
 EXCERPT_MAX_LINES = 500
-SPARE_PROPOSALS = 2
+SPARE_PROPOSALS = 1
+# Room for the reply. Models that think before answering spend part of this on the thinking;
+# one planter used 16,000 tokens on thinking alone before it started its answer.
+PLANT_REPLY_TOKENS = 32000
 
 PLANT_SYSTEM = """You help test a code review process by writing small, deliberate edits to a source file.
 You are given a requirement and a file that was just changed to meet it.
@@ -37,6 +40,7 @@ Rules:
 - Keep each edit small: usually one to five lines.
 - Each edit is applied alone to its own copy of the file, so several edits may touch the same line,
   but every edit must be a different defect.
+- Work quickly. Pick the edits and write them down; do not deliberate at length or weigh many alternatives.
 
 Reply with JSON only, in this shape:
 {"edits": [{"kind": "bug", "difficulty": "easy|medium|hard", "description": "what is wrong and why it matters",
@@ -161,10 +165,18 @@ def apply_edit(
 class ModelPlanter(Planter):
     """Asks a model to write the variants."""
 
-    def __init__(self, client: ChatClient, repo: Path, name: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        client: ChatClient,
+        repo: Path,
+        name: Optional[str] = None,
+        max_tokens: int = PLANT_REPLY_TOKENS,
+    ) -> None:
         self.client = client
         self.repo = repo
         self.name = name or client.model
+        self.max_tokens = max_tokens
+        self.problems: List[str] = []   # why fewer variants came back than were asked for
 
     def plant(self, change: Change, count: int, kinds: Sequence[str] = (KIND_BUG,)) -> List[Plant]:
         files = candidate_files(change)
@@ -197,29 +209,37 @@ class ModelPlanter(Planter):
             )
         )
         try:
-            reply = extract_json(self.client.complete(PLANT_SYSTEM, user, temperature=0.7, max_tokens=6000).text)
-        except ModelError:
+            reply = extract_json(
+                self.client.complete(PLANT_SYSTEM, user, temperature=0.7, max_tokens=self.max_tokens).text
+            )
+        except ModelError as error:
+            self.problems.append("The planter failed on {}: {}".format(file_diff.path, error))
             return []
         proposals = reply.get("edits") if isinstance(reply, dict) else reply
         if not isinstance(proposals, list):
+            self.problems.append("The planter's reply for {} was not a list of edits.".format(file_diff.path))
             return []
 
         remaining = dict(counts)
         seen_texts = set()
         plants: List[Plant] = []
+        unusable = 0
         for proposal in proposals:
             if not isinstance(proposal, dict):
+                unusable += 1
                 continue
             kind = proposal.get("kind")
             if remaining.get(kind, 0) <= 0:
                 continue
             applied = apply_edit(file_diff.path, head_text, file_diff.added_ranges, proposal)
             if applied is None:
+                unusable += 1
                 continue
             new_text, start, end = applied
             # Every variant is its own copy, so two edits may touch the same line.
             # Only an identical result is a duplicate.
             if new_text in seen_texts:
+                unusable += 1
                 continue
             seen_texts.add(new_text)
             remaining[kind] -= 1
@@ -238,10 +258,17 @@ class ModelPlanter(Planter):
                     ),
                 )
             )
+        if unusable:
+            self.problems.append(
+                "{} of {} edits proposed for {} were unusable: the quoted text was not in the file, "
+                "the edit was outside the changed lines, it changed nothing, or it repeated another.".format(
+                    unusable, len(proposals), file_diff.path
+                )
+            )
         return plants
 
     def alter_requirement(self, change: Change) -> str:
         user = "Requirement:\n{}\n\nCode change (diff):\n{}".format(
             change.requirement_text.strip(), change.diff[:40000]
         )
-        return self.client.complete(ALTER_SYSTEM, user, temperature=0.3, max_tokens=3000).text.strip()
+        return self.client.complete(ALTER_SYSTEM, user, temperature=0.3, max_tokens=self.max_tokens).text.strip()

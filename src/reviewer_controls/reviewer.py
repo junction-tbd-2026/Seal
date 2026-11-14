@@ -16,7 +16,7 @@ from .models import Change, Finding, ReviewResult
 
 MAX_DIFF_CHARS = 120000
 # Room for the reply. Models that think before answering spend part of this on the thinking.
-MAX_REPLY_TOKENS = 8000
+MAX_REPLY_TOKENS = 16000
 
 REVIEW_SYSTEM = """You are a senior engineer reviewing a pull request against its requirement.
 Report real problems only: defects, behaviour the requirement needs that is missing or wrong, regressions,

@@ -7,11 +7,16 @@ logged, never put in an error message, and never written to a result file.
 from __future__ import annotations
 
 import json
+import re
+import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
+
+_RECORD_LOCK = threading.Lock()
 
 
 class ModelError(RuntimeError):
@@ -34,17 +39,38 @@ class ChatClient:
         base_url: str,
         model: str,
         api_key: str,
-        timeout: float = 180.0,
+        timeout: float = 300.0,
         max_retries: int = 4,
+        debug_dir: Optional[str] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self._api_key = api_key
         self.timeout = timeout
         self.max_retries = max_retries
+        self.debug_dir = debug_dir
+        self._exchange = 0
 
     def __repr__(self) -> str:  # keep the key out of any debug output
         return "ChatClient(base_url={!r}, model={!r})".format(self.base_url, self.model)
+
+    def _record(self, system: str, user: str, text: str, thinking: str, finish: Any, usage: Any) -> None:
+        """Save one exchange for debugging when a debug folder is set. The key is never written."""
+        if not self.debug_dir:
+            return
+        with _RECORD_LOCK:
+            self._exchange += 1
+            number = self._exchange
+        folder = Path(self.debug_dir)
+        folder.mkdir(parents=True, exist_ok=True)
+        name = "{}-{:03d}.json".format(re.sub(r"[^A-Za-z0-9]+", "-", self.model).strip("-"), number)
+        (folder / name).write_text(
+            json.dumps(
+                {"model": self.model, "finish_reason": finish, "usage": usage, "system": system,
+                 "user": user, "answer": text, "thinking": thinking},
+                indent=2,
+            )
+        )
 
     def complete(self, system: str, user: str, temperature: float = 0.0, max_tokens: int = 4000) -> ChatResponse:
         payload = json.dumps(
@@ -69,8 +95,21 @@ class ChatClient:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     body = json.loads(response.read().decode("utf-8"))
                 usage = body.get("usage") or {}
+                choice = body["choices"][0]
+                message = choice["message"]
+                text = message.get("content") or ""
+                thinking = message.get("reasoning") or message.get("reasoning_content") or ""
+                finish = choice.get("finish_reason")
+                self._record(system, user, text, thinking, finish, usage)
+                if not text.strip():
+                    raise ModelError(
+                        "{} gave an empty answer (finish_reason={}, {} characters of thinking). "
+                        "It probably spent the whole reply budget of {} tokens thinking; raise the budget.".format(
+                            self.model, finish, len(thinking), max_tokens
+                        )
+                    )
                 return ChatResponse(
-                    text=body["choices"][0]["message"]["content"] or "",
+                    text=text,
                     prompt_tokens=int(usage.get("prompt_tokens") or 0),
                     completion_tokens=int(usage.get("completion_tokens") or 0),
                     seconds=time.time() - started,

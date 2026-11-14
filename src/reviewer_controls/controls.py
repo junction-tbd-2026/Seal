@@ -61,6 +61,7 @@ def run_controls(
     else:
         _say(progress, "Planting {} variants ({})".format(count, ", ".join(kinds)))
         report.plants = planter.plant(change, count, kinds)
+        report.notes.extend(getattr(planter, "problems", []))
     if len(report.plants) < count:
         report.notes.append("Asked for {} planted variants; {} were usable.".format(count, len(report.plants)))
 
