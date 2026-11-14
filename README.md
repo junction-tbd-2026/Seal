@@ -87,13 +87,16 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
 
 - The pipeline, the page and the tests work. The concept card and lessons
   log are up to date.
-- **Results are partial.** The pipeline changed this morning, so all four
-  sample changes are being rerun. In `results/` now: pull requests #1 and
-  #2 with both reviewers. Still to come: pull requests #3 and #4. On the
-  page those show as "Not tested yet" until their results are committed.
-- The reruns are running on Timo's machine. When they finish, regenerate
-  the summary with `scripts/summarise_results.py` and commit `results/` and
-  `docs/results.md`. Nobody else needs to start them.
+- **Results are partial.** The pipeline changed this morning, so the sample
+  changes are being rerun, and the reruns were stopped before they finished.
+  In `results/` now: pull requests #1 and #2 with both reviewers, and pull
+  request #3 with Nemotron only. Missing: pull request #3 with Gemma, and
+  pull request #4, which shows as "Not tested yet" on the page.
+- To finish them (needs keys, see below), run the pipeline for
+  `ju26-issue-2129` and `ju26-issue-2297`, then regenerate the summary with
+  `scripts/summarise_results.py` and commit `results/` and `docs/results.md`.
+  A full run of one pull request takes about 12 minutes; Gemma is the slow
+  part because it runs one review at a time.
 - Not started: running the planted copies (Modal), the product name, the
   video, the public repository.
 

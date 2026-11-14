@@ -26,7 +26,11 @@ read the ranges, not the fractions.
 
 ## Pull request #3: Generate a formatter for a type in a referenced assembly
 
-Not tested yet.
+28 files. 10 planted edits (4 bug, 3 harmless, 3 omission), written by DeepSeek-V4.1-Flash.
+
+| Reviewer | Verdict on the real change | Planted defects caught | Supported claim | False alarms | Verdict moved when requirement altered | No answer |
+|---|---|---|---|---|---|---|
+| nemotron-3.5-super-vl | does not meet | 6 of 7 | The true catch rate is between 49% and 97% (95% interval). | 0 of 3 | not tested | 0 |
 
 ## Pull request #4: Add ExcludeFromCodeCoverage to generated code
 
@@ -36,5 +40,5 @@ Not tested yet.
 
 | Reviewer | Planted defects caught | 95% interval | Bugs caught | Omissions caught | False alarms | No answer |
 |---|---|---|---|---|---|---|
-| nemotron-3.5-super-vl | 5 of 7 | 36% to 92% | 3 of 4 | 2 of 3 | 2 of 3 | 1 |
+| nemotron-3.5-super-vl | 11 of 14 | 52% to 92% | 7 of 8 | 4 of 6 | 2 of 6 | 1 |
 | gemma-4-31B-it | 1 of 13 | 1% to 33% | 1 of 8 | 0 of 5 | 0 of 6 | 1 |
