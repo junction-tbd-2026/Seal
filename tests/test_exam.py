@@ -147,3 +147,103 @@ class ExamTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProvenAndJudgementTests(unittest.TestCase):
+    """An objective is proven only by breaks it noticed and harmless edits it ignored, in the same lines."""
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.results = Path(self.folder.name)
+
+    def paired_run(self, withdrew=(True, True), near_alarm=False, breaks=2):
+        plants = [dict(plant("b{}".format(i), "bug", 11), breaks="R1") for i in range(breaks)]
+        plants.append(dict(plant("h1", "harmless", 11), near="R1"))
+        data = run("big", "2026-11-14T03:00:00Z", plants, set())
+        data["requirement_points"] = [{"id": "R1", "text": "Above max gives max."}]
+        data["original_review"]["points"] = [
+            {"id": "R1", "status": "met", "claimed_status": "met", "reason": "",
+             "evidence": [{"file": "src/A.cs", "line_start": 11, "line_end": 11}]}
+        ]
+        for outcome in data["outcomes"]:
+            if outcome["plant_id"].startswith("b"):
+                index = int(outcome["plant_id"][1:])
+                outcome.update(point_link="confirmed", point_noticed=withdrew[index], correct=withdrew[index])
+            else:
+                outcome.update(near_point="R1", near_alarm=near_alarm, flagged=near_alarm, correct=not near_alarm)
+        (self.results / "run.json").write_text(json.dumps(data))
+        return build_exam(self.results, "ju26-issue-1")["reviewers"][0]["points"][0]
+
+    def test_two_noticed_breaks_and_a_quiet_harmless_edit_prove_an_objective(self):
+        self.assertTrue(self.paired_run()["proven"])
+
+    def test_an_alarm_on_a_harmless_edit_in_the_same_lines_unproves_it(self):
+        point = self.paired_run(near_alarm=True)
+        self.assertFalse(point["proven"])
+        self.assertEqual((point["harmless_near"], point["harmless_near_alarms"]), (1, 1))
+
+    def test_one_break_is_not_enough_and_neither_is_flagging_while_still_saying_met(self):
+        self.assertFalse(self.paired_run(withdrew=(True,), breaks=1)["proven"])
+        self.assertFalse(self.paired_run(withdrew=(True, False))["proven"])
+
+    def test_judgement_words(self):
+        from reviewer_controls.exam import judgement
+        self.assertEqual(judgement(6, 7, 0, 3), "sharp")
+        self.assertEqual(judgement(5, 7, 2, 3), "jumpy")
+        self.assertEqual(judgement(0, 7, 0, 3), "blind")
+        self.assertEqual(judgement(3, 7, 2, 3), "mixed")
+        self.assertEqual(judgement(1, 2, 0, 3), "untested")
+
+
+class OwnerApprovalTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.results = Path(self.folder.name)
+        self.proposed = [{"id": "R1", "text": "one"}, {"id": "R2", "text": "two"}]
+
+    def test_an_approval_keeps_strikes_marks_risk_and_adds(self):
+        from reviewer_controls.objectives import approved_points, latest_approval, record_approval
+        record_approval(self.results, "c", self.proposed, "Pat",
+                        [{"id": "R1", "decision": "keep", "risk": "high"}, {"id": "R2", "decision": "strike"}, {"id": "R9"}],
+                        [{"text": "No new allocations on the hot path"}, {"text": "  "}])
+        approval = latest_approval(self.results, "c")
+        self.assertEqual([(o["id"], o["decision"], o["risk"]) for o in approval["objectives"]],
+                         [("R1", "keep", "high"), ("R2", "strike", "normal"), ("R3", "keep", "normal")])
+        points, risky = approved_points(approval)
+        self.assertEqual(([p.id for p in points], risky), (["R1", "R3"], ["R1"]))
+
+    def test_an_approval_needs_a_name_and_something_kept(self):
+        from reviewer_controls.objectives import record_approval
+        with self.assertRaises(ValueError):
+            record_approval(self.results, "c", self.proposed, " ", [])
+        with self.assertRaises(ValueError):
+            record_approval(self.results, "c", self.proposed, "Pat", [{"id": "R1", "decision": "strike"}, {"id": "R2", "decision": "strike"}])
+
+    def test_the_newest_approval_counts_and_older_ones_stay_on_record(self):
+        from reviewer_controls.objectives import APPROVAL_FILE, latest_approval, record_approval
+        record_approval(self.results, "c", self.proposed, "Pat", [])
+        record_approval(self.results, "c", self.proposed, "Sam", [{"id": "R2", "decision": "strike"}])
+        self.assertEqual(latest_approval(self.results, "c")["name"], "Sam")
+        self.assertEqual(len((self.results / APPROVAL_FILE).read_text().splitlines()), 2)
+
+
+class RuleAndLedgerTests(unittest.TestCase):
+    def test_a_very_large_change_goes_to_a_full_read_by_rule_and_the_ledger_counts_answers(self):
+        from reviewer_controls.ledger import build_ledger
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        results = Path(folder.name)
+        (results / "run.json").write_text(json.dumps(run("big", "2026-11-14T03:00:00Z", [plant("p01", "bug", 11)], set())))
+        pulls = results / "pulls.json"
+        pulls.write_text(json.dumps({"repository_url": "https://example.invalid/r", "pull_requests": [
+            {"number": 1, "change_id": "ju26-issue-1", "title": "small", "files": 4},
+            {"number": 4, "change_id": "ju26-issue-4", "title": "huge", "files": 237},
+        ]}))
+        record_signoff(results, "ju26-issue-1", "big", "Ada", "reject", findings={"0": "real", "1": "not_real"}, seconds=42)
+        ledger = build_ledger(results, pulls, None, {"caught": 1, "checked": 2})
+        self.assertEqual([c["status"] for c in ledger["changes"]][1], "full_read_rule")
+        self.assertEqual(ledger["measures"]["findings_real"], {"real": 1, "judged": 2})
+        self.assertEqual(ledger["measures"]["time_to_sign"]["median_seconds"], 42)
+        self.assertEqual(ledger["measures"]["signer_drill"], {"caught": 1, "checked": 2})
