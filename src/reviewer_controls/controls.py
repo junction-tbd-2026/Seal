@@ -9,7 +9,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .llm import ModelError
 from .diffs import same_file
-from .matcher import DEFAULT_TOLERANCE_LINES, finding_hits_plant, score_plant
+from .matcher import DEFAULT_TOLERANCE_LINES, MAX_FINDING_LINES, finding_hits_plant, score_plant
 from .models import KIND_BUG, KIND_HARMLESS, Change, ControlOutcome, Plant, RequirementPoint, ReviewResult, RunReport
 from .planter import Planter
 from .reviewer import Reviewer
@@ -26,6 +26,16 @@ def point_status(review: ReviewResult, point_id: Optional[str]) -> Optional[str]
     if not point_id:
         return None
     return next((point.status for point in review.points if point.id == point_id), None)
+
+
+def claimed_status(review: ReviewResult, point_id: Optional[str]) -> Optional[str]:
+    """What the reviewer itself answered for a point, before our citation check changed anything."""
+    if not point_id:
+        return None
+    point = next((point for point in review.points if point.id == point_id), None)
+    if point is None:
+        return None
+    return point.claimed_status or point.status
 
 
 def sits_in_cited_lines(plant: Plant, original: ReviewResult) -> bool:
@@ -47,33 +57,45 @@ def score(
 ) -> ControlOutcome:
     """Grade one variant.
 
-    A planted defect counts as caught when the reviewer flags the planted spot, or stops
-    calling the requirement point it breaks "met". A harmless edit counts as a false alarm
-    when the reviewer flags it, or withdraws a "met" it gave the real change.
+    A planted defect counts as caught when the reviewer flags the planted edit (pointing at it,
+    or naming what it removed), or stops calling the requirement point it breaks "met". A
+    harmless edit counts as a false alarm when the reviewer flags it, or withdraws a "met" it
+    gave the real change.
+
+    Only the reviewer's own answers are compared. Our citation check can lower a "met" to
+    "cannot_tell"; that is our doing, not the reviewer noticing anything, so it is ignored here.
 
     Points whose answer changed between two identical reviews are ignored: a change of
-    answer there proves nothing. So is a spot the reviewer already flagged in the real change.
+    answer there proves nothing. So is a spot the reviewer already flagged, narrowly, in the
+    real change.
     """
     outcome = score_plant(plant, variant.findings, variant.reviewer)
     outcome.point_id = plant.breaks
 
+    def withdrew(point_id: str) -> bool:
+        return (
+            claimed_status(original, point_id) == "met"
+            and point_id not in unstable
+            and claimed_status(variant, point_id) != "met"
+        )
+
     if plant.breaks:
         outcome.point_link = "confirmed" if sits_in_cited_lines(plant, original) else "unconfirmed"
-        if point_status(original, plant.breaks) == "met" and plant.breaks not in unstable:
-            outcome.point_noticed = point_status(variant, plant.breaks) != "met"
+        if claimed_status(original, plant.breaks) == "met" and plant.breaks not in unstable:
+            outcome.point_noticed = withdrew(plant.breaks)
             if plant.should_be_flagged and outcome.point_noticed:
                 outcome.correct = True
 
     if not plant.should_be_flagged:
-        withdrew = any(
-            point.status == "met" and point.id not in unstable and point_status(variant, point.id) != "met"
-            for point in original.points
-        )
-        if withdrew:
+        if plant.near:
+            outcome.near_point = plant.near
+            outcome.near_alarm = withdrew(plant.near)
+        if any(withdrew(point.id) for point in original.points):
             outcome.flagged = True
             outcome.correct = False
 
-    if any(finding_hits_plant(f, plant) for f in original.findings):
+    narrow = [f for f in original.findings if f.line_end - f.line_start + 1 <= MAX_FINDING_LINES]
+    if any(finding_hits_plant(f, plant) for f in narrow):
         outcome.inconclusive = True
     return outcome
 
@@ -120,6 +142,9 @@ def run_controls(
     points: Optional[List[RequirementPoint]] = None,
     original_review: Optional[ReviewResult] = None,
     repeat_review: Optional[ReviewResult] = None,
+    per_point: Optional[int] = None,
+    silence: int = 2,
+    risky: Sequence[str] = (),
 ) -> RunReport:
     """Run the controls for one reviewer.
 
@@ -177,12 +202,18 @@ def run_controls(
     if plants is not None:
         _say(progress, "Reusing {} planted variants".format(len(plants)))
         report.plants = plants
+    elif per_point:
+        _say(progress, "Planting {} breaks and {} harmless edits per point, and {} elsewhere".format(per_point, per_point, silence))
+        report.plants = planter.plant_per_point(
+            change, report.requirement_points, cited_targets([original_review]), per_point, silence, risky
+        )
+        report.notes.extend(getattr(planter, "problems", []))
     else:
         _say(progress, "Planting {} variants ({}) inside the lines the reviewer cited".format(count, ", ".join(kinds)))
         report.plants = planter.plant(change, count, kinds, report.requirement_points, cited_targets([original_review]))
         report.notes.extend(getattr(planter, "problems", []))
-    if len(report.plants) < count:
-        report.notes.append("Asked for {} planted variants; {} were usable.".format(count, len(report.plants)))
+        if len(report.plants) < count:
+            report.notes.append("Asked for {} planted variants; {} were usable.".format(count, len(report.plants)))
 
     _say(progress, "Reviewing {} variants blind".format(len(report.plants)))
 

@@ -124,10 +124,14 @@ def parse_points(raw: Any, points: List[RequirementPoint]) -> List[PointAssessme
             evidence.append({"file": str(entry["file"]), "line_start": start, "line_end": max(start, end)})
         if status not in ("met", "not_met", "cannot_tell"):
             status = "cannot_tell"
+        claimed = status
         if status == "met" and not evidence:
             status = "cannot_tell"   # a claim with nothing to show for it is not evidence
         assessments.append(
-            PointAssessment(id=point.id, status=status, evidence=evidence, reason=str(item.get("reason") or "").strip())
+            PointAssessment(
+                id=point.id, status=status, evidence=evidence, reason=str(item.get("reason") or "").strip(),
+                claimed_status=claimed,
+            )
         )
     return assessments
 

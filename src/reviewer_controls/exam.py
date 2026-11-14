@@ -16,9 +16,14 @@ from .card import supported_claim
 from .diffs import _HUNK_HEADER, same_file, split_diff
 from .matcher import finding_hits_plant
 from .models import KIND_HARMLESS, Finding, Plant
+from .objectives import latest_approval
 from .planter import is_test_file
 
 SIGNOFF_FILE = "signoffs.jsonl"
+# A change this large goes to a full human read by rule; the AI test is not run on it.
+FULL_READ_FILES = 100
+# A point counts as proven only after at least this many breaks in its cited lines.
+PROVEN_MIN_BREAKS = 2
 
 
 def structured_diff(diff: str) -> List[Dict[str, Any]]:
@@ -112,6 +117,24 @@ def distinct_places(plants: List[dict]) -> List[str]:
     return [plant["id"] for plant in kept]
 
 
+def judgement(caught: int, defects: int, alarms: int, harmless: int) -> str:
+    """One word for how the reviewer behaved as a detector on this change.
+
+    sharp: notices breaks and stays quiet on harmless edits; jumpy: reacts to everything;
+    blind: reacts to almost nothing; mixed: anything else. Too few samples gives "untested".
+    """
+    if defects < 3 or harmless < 2:
+        return "untested"
+    catch, alarm = caught / defects, alarms / harmless
+    if catch >= 0.7 and alarm <= 0.25:
+        return "sharp"
+    if catch >= 0.5 and alarm >= 0.5:
+        return "jumpy"
+    if catch <= 0.25 and alarm <= 0.25:
+        return "blind"
+    return "mixed"
+
+
 def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
     plants = run["plants"]
     reviews = {r["variant_id"]: r for r in run.get("variant_reviews", [])}
@@ -148,7 +171,24 @@ def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
         # for those there is no arguing about whether the edit really touched the point.
         broken = [p for p in aimed if outcomes.get(p["id"], {}).get("point_link") == "confirmed"]
         noticed = sum(1 for p in broken if results[p["id"]] == "caught")
+        # Noticing a break means taking back "met", not only pointing at the line.
+        withdrew = sum(1 for p in broken if outcomes.get(p["id"], {}).get("point_noticed") is True)
+        near = [
+            p for p in plants
+            if p["kind"] == KIND_HARMLESS and p.get("near") == point["id"] and results[p["id"]] in ("left_alone", "false_alarm")
+        ]
+        near_alarms = sum(1 for p in near if outcomes.get(p["id"], {}).get("near_alarm") is True)
         unstable = point["id"] in run.get("unstable_points", [])
+        tests_only = bool(claim.get("evidence")) and all(is_test_file(ref["file"]) for ref in claim["evidence"])
+        proven = (
+            claim.get("status") == "met"
+            and not unstable
+            and not tests_only
+            and len(broken) >= PROVEN_MIN_BREAKS
+            and withdrew == len(broken)
+            and len(near) >= 1
+            and near_alarms == 0
+        )
         points.append(
             {
                 "id": point["id"],
@@ -158,11 +198,15 @@ def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
                 "reason": claim.get("reason", ""),
                 "broken_total": len(broken),
                 "broken_noticed": noticed,
+                "broken_withdrew": withdrew,
+                "harmless_near": len(near),
+                "harmless_near_alarms": near_alarms,
+                "proven": proven,
                 "aimed_elsewhere": len(aimed) - len(broken),
                 "dropped_evidence": claim.get("dropped_evidence", 0),
                 "broad_evidence": claim.get("broad_evidence", 0),
                 # Proof that is only a test counts for little here: the tests were not run.
-                "tests_only": bool(claim.get("evidence")) and all(is_test_file(ref["file"]) for ref in claim["evidence"]),
+                "tests_only": tests_only,
                 "noticed": "unstable" if unstable
                 else "untested" if not broken
                 else "yes" if noticed == len(broken)
@@ -172,8 +216,10 @@ def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
+    false_alarms = sum(1 for p in harmless if results[p["id"]] == "false_alarm")
     return {
         "name": run["reviewer"],
+        "judgement": judgement(caught, len(defects), false_alarms, len(harmless)),
         "points": points,
         "run_file": run["_file"],
         "created_at": run.get("created_at", ""),
@@ -187,7 +233,7 @@ def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
             "defects_total": len(defects),
             "defects_caught": caught,
             "harmless_total": len(harmless),
-            "false_alarms": sum(1 for p in harmless if results[p["id"]] == "false_alarm"),
+            "false_alarms": false_alarms,
             "failed": sum(1 for value in results.values() if value == "failed"),
             "inconclusive": sum(1 for value in results.values() if value == "inconclusive"),
         },
@@ -222,8 +268,13 @@ def list_changes(results_dir: Path) -> List[Dict[str, Any]]:
     return list(seen.values())
 
 
-def build_exam(results_dir: Path, change_id: str) -> Optional[Dict[str, Any]]:
-    """The newest set of planted variants for a change, with every reviewer that was tested on it."""
+def build_exam(results_dir: Path, change_id: str, hide_missed: bool = False) -> Optional[Dict[str, Any]]:
+    """The newest set of planted variants for a change, with every reviewer that was tested on it.
+
+    With `hide_missed`, the text of every planted edit some reviewer missed is left out. Those are
+    the spots the signer is asked to judge, and one of them may be the spot-check copy on screen:
+    showing what was planted there would give the test away.
+    """
     runs = [run for run in load_runs(results_dir) if run["change"]["id"] == change_id]
     if not runs:
         return None
@@ -235,6 +286,10 @@ def build_exam(results_dir: Path, change_id: str) -> Optional[Dict[str, Any]]:
             by_reviewer[run["reviewer"]] = run
 
     change = newest["change"]
+    reviewers = [_reviewer_view(run) for run in sorted(by_reviewer.values(), key=lambda r: r.get("created_at", ""))]
+    missed = {plant_id for reviewer in reviewers for plant_id in reviewer["read_yourself"]}
+    missed |= {p["id"] for reviewer in reviewers for p in newest["plants"] if reviewer["results"].get(p["id"]) == "missed"}
+    hidden = missed if hide_missed else set()
     return {
         "change": {
             "id": change["id"],
@@ -253,16 +308,21 @@ def build_exam(results_dir: Path, change_id: str) -> Optional[Dict[str, Any]]:
                 "id": p["id"],
                 "kind": p["kind"],
                 "difficulty": p.get("difficulty", "medium"),
-                "description": p["description"],
+                "description": "" if p["id"] in hidden else p["description"],
                 "file": p["file"],
                 "line_start": p["line_start"],
                 "line_end": p["line_end"],
                 "breaks": p.get("breaks"),
-                "patch": structured_diff(p.get("patch", "")),
+                "near": p.get("near"),
+                "hidden": p["id"] in hidden,
+                "patch": [] if p["id"] in hidden else structured_diff(p.get("patch", "")),
             }
             for p in newest["plants"]
         ],
-        "reviewers": [_reviewer_view(run) for run in sorted(by_reviewer.values(), key=lambda r: r.get("created_at", ""))],
+        "reviewers": reviewers,
+        "approval": latest_approval(results_dir, change_id),
+        "changed_lines": sum(f.added_line_count for f in split_diff(change.get("diff", ""))),
+        "planted_lines": len({(p["file"], n) for p in newest["plants"] for n in range(p["line_start"], p["line_end"] + 1)}),
         "signoffs": signoffs_for(results_dir, change_id),
     }
 
@@ -275,7 +335,15 @@ def list_pulls(pulls_file: Path, results_dir: Path) -> Dict[str, Any]:
         exam = build_exam(results_dir, pull["change_id"])
         entry = dict(pull)
         entry["url"] = "{}/pull/{}".format(data.get("repository_url", "").rstrip("/"), pull["number"])
-        if exam is None or not exam["reviewers"]:
+        if int(pull.get("files") or 0) > FULL_READ_FILES:
+            entry.update(
+                {
+                    "status": "full_read_rule",
+                    "rule": "More than {} files changed: too large for the AI test, a person reads all of it.".format(FULL_READ_FILES),
+                    "lines_to_read": 0, "reviewers": [], "signed": None,
+                }
+            )
+        elif exam is None or not exam["reviewers"]:
             entry.update({"status": "untested", "lines_to_read": 0, "reviewers": [], "signed": None})
         else:
             primary = exam["reviewers"][0]
@@ -288,6 +356,7 @@ def list_pulls(pulls_file: Path, results_dir: Path) -> Dict[str, Any]:
                     "reviewers": [r["name"] for r in exam["reviewers"]],
                     "caught": primary["counts"]["defects_caught"],
                     "planted_defects": primary["counts"]["defects_total"],
+                    "approved": exam["approval"] is not None,
                     "signed": signed,
                 }
             )
@@ -298,6 +367,13 @@ def list_pulls(pulls_file: Path, results_dir: Path) -> Dict[str, Any]:
         "base_branch": data.get("base_branch", ""),
         "pull_requests": pulls,
     }
+
+
+def clean_answers(answers: Any, allowed: Tuple[str, ...]) -> Dict[str, str]:
+    """The signer's answers by id, keeping only allowed values."""
+    if not isinstance(answers, dict):
+        return {}
+    return {str(key)[:40]: value for key, value in answers.items() if value in allowed}
 
 
 def clean_spots(spots: Any) -> List[Dict[str, str]]:
@@ -316,8 +392,16 @@ def record_signoff(
     name: str,
     decision: str,
     spots: Any = None,
+    points: Any = None,
+    findings: Any = None,
+    seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Append a named human's decision. A sign-off is never edited, only added to."""
+    """Append a named human's decision. A sign-off is never edited, only added to.
+
+    It keeps everything the person said on the way: a verdict per marked spot, an answer per
+    objective (met, not met, or cannot tell) and per reported finding (real or not), and how
+    long the review took. That is what the trust ledger counts.
+    """
     name = name.strip()
     if not name:
         raise ValueError("a sign-off needs a name")
@@ -329,12 +413,55 @@ def record_signoff(
         "name": name[:120],
         "decision": decision,
         "spots": clean_spots(spots),
+        "points": clean_answers(points, ("met", "not_met", "cannot_tell")),
+        "findings": clean_answers(findings, ("real", "not_real")),
+        "seconds": round(float(seconds), 1) if seconds is not None else None,
         "signed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     results_dir.mkdir(parents=True, exist_ok=True)
     with (results_dir / SIGNOFF_FILE).open("a") as handle:
         handle.write(json.dumps(entry) + "\n")
     return entry
+
+
+def objective_ids(exam: Dict[str, Any], reviewer: Dict[str, Any]) -> List[str]:
+    """The objectives a sign-off answers: the owner's approved ones, or else the reviewer's points."""
+    approval = exam.get("approval")
+    if approval:
+        return [item["id"] for item in approval.get("objectives", []) if item.get("decision") == "keep"]
+    return [point["id"] for point in reviewer["points"]]
+
+
+def acceptance_problems(exam: Dict[str, Any], reviewer_name: str, spots: Any, points: Any, findings: Any) -> List[str]:
+    """Why an accept cannot be recorded yet. Empty when it can.
+
+    The page enforces the same rules; they are checked here too, because an approval that only
+    the browser checked is not an approval anyone can rely on.
+    """
+    reviewer = next((item for item in exam["reviewers"] if item["name"] == reviewer_name), None)
+    if reviewer is None:
+        return ["unknown reviewer {}".format(reviewer_name)]
+    problems = []
+    if not exam.get("approval"):
+        problems.append("the objectives have not been approved by an owner")
+    verdicts = {spot["plant_id"]: spot["verdict"] for spot in clean_spots(spots)}
+    open_spots = [plant_id for plant_id in reviewer["read_yourself"] if plant_id not in verdicts]
+    if open_spots:
+        problems.append("{} marked spot(s) have no verdict".format(len(open_spots)))
+    if any(verdict == "wrong" for verdict in verdicts.values()):
+        problems.append("a marked spot was judged wrong")
+    answers = clean_answers(points, ("met", "not_met", "cannot_tell"))
+    wanted = objective_ids(exam, reviewer)
+    if any(point_id not in answers for point_id in wanted):
+        problems.append("not every objective has an answer")
+    if any(answers.get(point_id) == "not_met" for point_id in wanted):
+        problems.append("an objective was judged not met")
+    judged = clean_answers(findings, ("real", "not_real"))
+    if any(str(index) not in judged for index in range(len(reviewer["findings"]))):
+        problems.append("not every reported finding has an answer")
+    if any(value == "real" for value in judged.values()):
+        problems.append("a reported finding was judged real")
+    return problems
 
 
 def signoffs_for(results_dir: Path, change_id: str) -> List[Dict[str, Any]]:

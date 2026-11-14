@@ -421,6 +421,74 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue(any("p02 failed" in note for note in report.notes))
 
 
+class PairedPlantingTests(unittest.TestCase):
+    """Breaks and harmless edits in the same cited lines, so the reviewer is tested on telling them apart."""
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        root = Path(self.folder.name)
+        self.repo = make_repo(root)
+        requirements = root / "requirements"
+        requirements.mkdir()
+        (requirements / "1.md").write_text("# Requirement #1\n\nClamp must never return more than max.\n")
+        self.change = load_change(self.repo, "ju26-issue-1", requirements)
+        self.points = [RequirementPoint(id="R1", text="above max gives max"), RequirementPoint(id="R2", text="else unchanged")]
+        self.targets = {
+            "R1": [{"file": "src/Calc.cs", "line_start": 5, "line_end": 8}],
+            "R2": [{"file": "src/Calc.cs", "line_start": 9, "line_end": 9}],
+        }
+
+    def plant(self, **kwargs):
+        planter = ModelPlanter(ScriptedModel(), self.repo, name="planter-model")
+        return planter, planter.plant_per_point(self.change, self.points, self.targets, **kwargs)
+
+    def test_breaks_go_to_their_point_and_harmless_edits_are_tagged_with_the_point_they_sit_in(self):
+        planter, plants = self.plant(per_point=2, silence=0)
+        defects = [p for p in plants if p.kind != KIND_HARMLESS]
+        harmless = [p for p in plants if p.kind == KIND_HARMLESS]
+        self.assertEqual({p.breaks for p in defects}, {"R1"})
+        self.assertEqual(len(defects), 2)
+        self.assertEqual([(p.near, p.breaks) for p in harmless], [("R2", None)])
+        self.assertTrue(any("harmless" in problem for problem in planter.problems))   # fewer than asked are said so
+
+    def test_the_prompt_asks_for_each_point_by_its_cited_lines(self):
+        model = ScriptedModel()
+        ModelPlanter(model, self.repo).plant_per_point(self.change, self.points, self.targets, per_point=1, silence=1)
+        prompt = [user for system, user in model.calls if system == PLANT_SYSTEM][0]
+        self.assertIn("R1: cited lines 5-8", prompt)
+        self.assertIn("R2: cited lines 9-9", prompt)
+        self.assertIn("NOT inside any of the cited lines", prompt)
+
+    def test_a_point_marked_risky_gets_one_more_of_each(self):
+        model = ScriptedModel()
+        ModelPlanter(model, self.repo).plant_per_point(self.change, self.points, self.targets, per_point=1, silence=0, risky=["R1"])
+        prompt = [user for system, user in model.calls if system == PLANT_SYSTEM][0]
+        self.assertIn("R1: cited lines 5-8. Propose 3 breaks", prompt)
+        self.assertIn("R2: cited lines 9-9. Propose 2 breaks", prompt)
+
+    def test_scoring_uses_the_reviewers_own_answer_not_our_citation_check(self):
+        from reviewer_controls.controls import score
+        from reviewer_controls.models import Plant, PointAssessment, ReviewResult
+        plant = Plant(id="p1", kind=KIND_HARMLESS, description="", file="src/Calc.cs", line_start=9, line_end=9, near="R1")
+        original = ReviewResult(reviewer="r", variant_id="original", points=[PointAssessment(id="R1", status="met", claimed_status="met")])
+        # Our check lowered "met" to "cannot_tell" in the copy, but the reviewer itself still said met.
+        copy = ReviewResult(reviewer="r", variant_id="p1", points=[PointAssessment(id="R1", status="cannot_tell", claimed_status="met")])
+        outcome = score(plant, copy, original)
+        self.assertTrue(outcome.correct)
+        self.assertEqual((outcome.near_point, outcome.near_alarm), ("R1", False))
+        withdrawn = ReviewResult(reviewer="r", variant_id="p1", points=[PointAssessment(id="R1", status="cannot_tell", claimed_status="cannot_tell")])
+        outcome = score(plant, withdrawn, original)
+        self.assertEqual((outcome.correct, outcome.near_alarm), (False, True))
+
+    def test_a_very_broad_finding_in_the_real_change_does_not_rule_a_copy_out(self):
+        from reviewer_controls.controls import score
+        from reviewer_controls.models import Finding, Plant, ReviewResult
+        plant = Plant(id="p1", kind="bug", description="", file="src/Calc.cs", line_start=40, line_end=40)
+        broad = ReviewResult(reviewer="r", variant_id="original", findings=[Finding("src/Calc.cs", 1, 179, "everything")])
+        self.assertFalse(score(plant, ReviewResult(reviewer="r", variant_id="p1"), broad).inconclusive)
+
+
 class SmallPieceTests(unittest.TestCase):
     def test_extract_json_ignores_prose_and_fences(self):
         self.assertEqual(extract_json('Sure.\n```json\n{"a": [1, 2]}\n```\nDone.'), {"a": [1, 2]})

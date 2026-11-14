@@ -1,0 +1,44 @@
+{
+  "synthetic": true,
+  "label": "Example history, synthetic. Invented to show how the ledger behaves over time; not measured.",
+  "weeks": ["W1", "W2", "W3", "W4", "W5", "W6"],
+  "areas": [
+    {
+      "area": "Source generator",
+      "routed_share": [0.62, 0.55, 0.48, 0.41, 0.38, 0.35],
+      "catch_rate": [0.71, 0.74, 0.78, 0.80, 0.81, 0.83],
+      "alarm_rate": [0.30, 0.25, 0.20, 0.18, 0.15, 0.15],
+      "minutes_to_sign": [41, 36, 30, 26, 24, 22],
+      "escapes": [0, 0, 0, 0, 0, 0],
+      "reverts": [1, 0, 0, 0, 0, 0],
+      "plants_per_point": [2, 2, 2, 1, 1, 1]
+    },
+    {
+      "area": "Analyzer",
+      "routed_share": [0.66, 0.58, 0.50, 0.92, 0.80, 0.70],
+      "catch_rate": [0.68, 0.72, 0.75, 0.75, 0.79, 0.82],
+      "alarm_rate": [0.35, 0.30, 0.22, 0.22, 0.20, 0.18],
+      "minutes_to_sign": [44, 38, 33, 58, 49, 42],
+      "escapes": [0, 0, 1, 0, 0, 0],
+      "reverts": [0, 0, 1, 0, 0, 0],
+      "plants_per_point": [2, 2, 2, 3, 3, 2],
+      "events": [
+        {
+          "week": "W3",
+          "what": "An escape: a defect the AI reviewer had called met reached main and was reverted.",
+          "effect": "From W4 the analyzer area loses its earned trust: every objective goes to a human again and gets 3 planted breaks instead of 2, until the record recovers."
+        }
+      ]
+    },
+    {
+      "area": "Formatters",
+      "routed_share": [0.70, 0.66, 0.60, 0.55, 0.52, 0.47],
+      "catch_rate": [0.55, 0.60, 0.64, 0.70, 0.72, 0.76],
+      "alarm_rate": [0.45, 0.40, 0.33, 0.28, 0.25, 0.22],
+      "minutes_to_sign": [52, 47, 43, 38, 35, 33],
+      "escapes": [0, 0, 0, 0, 0, 0],
+      "reverts": [0, 1, 0, 0, 0, 0],
+      "plants_per_point": [2, 2, 2, 2, 2, 2]
+    }
+  ]
+}

@@ -48,6 +48,9 @@ class PointAssessment:
     reason: str = ""
     dropped_evidence: int = 0        # citations thrown out, for any reason
     broad_evidence: int = 0          # of those, the ones that covered too many lines to count
+    # What the reviewer itself answered, before our citation check could lower "met" to "cannot_tell".
+    # Scoring uses this, so a change made by our check is never counted as the reviewer noticing something.
+    claimed_status: str = ""
 
 
 @dataclass
@@ -64,6 +67,7 @@ class Plant:
     difficulty: str = "medium"       # easy | medium | hard
     proven: Optional[bool] = None    # True once a test distinguishes it from the original
     breaks: Optional[str] = None     # the requirement point this edit breaks, if any
+    near: Optional[str] = None       # for a harmless edit: the point whose cited lines it sits in
     variant_diff: str = ""           # the whole change with the edit applied; not saved
 
     @property
@@ -111,6 +115,8 @@ class ControlOutcome:
     point_id: Optional[str] = None   # the requirement point the planted edit breaks
     point_noticed: Optional[bool] = None   # did the reviewer stop calling that point met
     point_link: Optional[str] = None  # "confirmed" when the edit sits in lines the reviewer cited for that point
+    near_point: Optional[str] = None  # for a harmless edit: the point whose cited lines it sits in
+    near_alarm: Optional[bool] = None  # for a harmless edit: did the reviewer withdraw "met" on that point
 
 
 @dataclass

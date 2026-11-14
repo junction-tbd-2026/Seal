@@ -45,6 +45,7 @@ Rules:
 
 When requirement points are listed, say which one each edit breaks: "breaks": "R2".
 Use null for a harmless edit, or when no single point is broken. Spread the edits across the points.
+For a harmless edit placed in the cited lines of a point, name that point in "near": "R2".
 
 Reply with JSON only, in this shape:
 {"edits": [{"kind": "bug", "difficulty": "easy|medium|hard", "description": "what is wrong and why it matters",
@@ -90,6 +91,18 @@ class Planter:
 
     def alter_requirement(self, change: Change) -> str:
         """Return a requirement the change should no longer satisfy."""
+        raise NotImplementedError
+
+    def plant_per_point(
+        self,
+        change: Change,
+        points: List[RequirementPoint],
+        targets: Dict[str, List[dict]],
+        per_point: int = 2,
+        silence: int = 2,
+        risky: Sequence[str] = (),
+    ) -> List[Plant]:
+        """Paired planting: for every point, breaks and harmless edits in the same cited lines."""
         raise NotImplementedError
 
 
@@ -420,6 +433,173 @@ class ModelPlanter(Planter):
                 "outside the changed or cited lines, it changed nothing, or it repeated another.".format(
                     unusable, len(proposals), file_diff.path
                 )
+            )
+        return plants
+
+    def plant_per_point(
+        self,
+        change: Change,
+        points: List[RequirementPoint],
+        targets: Dict[str, List[dict]],
+        per_point: int = 2,
+        silence: int = 2,
+        risky: Sequence[str] = (),
+    ) -> List[Plant]:
+        """Plant a matched test for every requirement point the reviewer called met.
+
+        For each point: `per_point` breaks (bugs or omissions) and `per_point` harmless edits,
+        all inside the lines the reviewer cited for that point. A break it notices and a harmless
+        edit it shrugs off, in the same lines, is the only result that shows it can tell the two
+        apart there. Points the owner marked risky get one more of each.
+
+        Then `silence` breaks in changed lines nobody cited, to test whether the reviewer's
+        silence elsewhere means anything.
+        """
+        self._points = list(points)
+        self._targets = targets or {}
+        files = candidate_files(change)
+        if not files:
+            return []
+
+        # Each point is tested in the one file where it has the most cited lines.
+        home: Dict[str, FileDiff] = {}
+        for point in points:
+            best, best_lines = None, 0
+            for file_diff in files:
+                lines = sum(b - a + 1 for a, b in self._cited_in(file_diff.path).get(point.id, []))
+                if lines > best_lines:
+                    best, best_lines = file_diff, lines
+            if best is not None:
+                home[point.id] = best
+        quiet_home = files[0] if silence > 0 else None
+
+        plants: List[Plant] = []
+        for file_diff in files:
+            here = [point for point in points if home.get(point.id) is file_diff]
+            quiet = silence if file_diff is quiet_home else 0
+            if not here and not quiet:
+                continue
+            budget = {point.id: per_point + (1 if point.id in risky else 0) for point in here}
+            plants.extend(self._plant_paired(change, file_diff, budget, quiet, first_number=len(plants) + 1))
+        return plants
+
+    def _plant_paired(
+        self, change: Change, file_diff: FileDiff, budget: Dict[str, int], quiet: int, first_number: int
+    ) -> List[Plant]:
+        head_text = file_at(self.repo, change.head_ref, file_diff.path)
+        if head_text is None:
+            return []
+        base_text = file_at(self.repo, change.base_ref, file_diff.path)
+        cited = {pid: ranges for pid, ranges in self._cited_in(file_diff.path).items() if pid in budget}
+        listed = "".join("\n{}: {}".format(point.id, point.text) for point in self._points)
+        asks = []
+        for pid, n in budget.items():
+            ranges = ", ".join("{}-{}".format(a, b) for a, b in cited.get(pid, []))
+            asks.append(
+                "\n- {}: cited lines {}. Propose {} breaks (kind \"bug\" or \"omission\", \"breaks\": \"{}\") and {} "
+                "harmless edits (\"near\": \"{}\"), every one changing code inside those lines.".format(
+                    pid, ranges, n + SPARE_PROPOSALS, pid, n + SPARE_PROPOSALS, pid
+                )
+            )
+        if quiet:
+            asks.append(
+                "\n- Also propose {} edits of kind \"bug\" in changed lines (marked \"+\") that are NOT inside any of "
+                "the cited lines above, with \"breaks\": null.".format(quiet + SPARE_PROPOSALS)
+            )
+        shown_ranges = file_diff.added_ranges + [r for ranges in cited.values() for r in ranges]
+        user = "Requirement:\n{}\n\nRequirement points:{}\n\nFile: {}\n\n{}\n\nFor this file:{}".format(
+            change.requirement_text.strip(), listed, file_diff.path, numbered_excerpt(head_text, shown_ranges), "".join(asks)
+        )
+        try:
+            reply = extract_json(
+                self.client.complete(PLANT_SYSTEM, user, temperature=0.7, max_tokens=self.max_tokens).text,
+                accept=lambda value: (isinstance(value, dict) and isinstance(value.get("edits"), list))
+                or (isinstance(value, list) and bool(value) and all(isinstance(item, dict) for item in value)),
+            )
+        except ModelError as error:
+            self.problems.append("The planter failed on {}: {}".format(file_diff.path, error))
+            return []
+        proposals = reply.get("edits") if isinstance(reply, dict) else reply
+        if not isinstance(proposals, list):
+            self.problems.append("The planter's reply for {} was not a list of edits.".format(file_diff.path))
+            return []
+
+        # Sort every usable edit into a slot: (point, defect), (point, harmless) or the quiet slot.
+        slots: Dict[Tuple[str, str], List[tuple]] = {}
+        seen_texts = set()
+        unusable = 0
+        for proposal in proposals:
+            kind = proposal.get("kind") if isinstance(proposal, dict) else None
+            if kind not in (KIND_BUG, KIND_OMISSION, KIND_HARMLESS):
+                unusable += 1
+                continue
+            applied = apply_edit(file_diff.path, head_text, file_diff.added_ranges, proposal)
+            if applied is None:
+                unusable += 1
+                continue
+            new_text, start, end = applied
+            if new_text in seen_texts:
+                unusable += 1
+                continue
+            inside = [pid for pid, ranges in cited.items() if overlaps_added(ranges, start, end)]
+            named = proposal.get("near") if kind == KIND_HARMLESS else proposal.get("breaks")
+            if inside:
+                pid = named if named in inside else inside[0]
+                slot = (pid, "harmless" if kind == KIND_HARMLESS else "defect")
+            elif kind != KIND_HARMLESS and quiet and not any(
+                overlaps_added(ranges, start, end) for ranges in self._cited_in(file_diff.path).values()
+            ):
+                pid, slot = None, ("", "quiet")
+            else:
+                unusable += 1
+                continue
+            seen_texts.add(new_text)
+            slots.setdefault(slot, []).append((kind, pid, proposal, new_text, start, end))
+
+        # Fill each slot, preferring edits on lines not already used in that slot.
+        chosen: List[tuple] = []
+        wanted = {(pid, "defect"): n for pid, n in budget.items()}
+        wanted.update({(pid, "harmless"): n for pid, n in budget.items()})
+        if quiet:
+            wanted[("", "quiet")] = quiet
+        for slot, n in wanted.items():
+            picked: List[tuple] = []
+            for only_new_lines in (True, False):
+                for item in slots.get(slot, []):
+                    if len(picked) >= n or item in picked:
+                        continue
+                    if only_new_lines and any(item[4] <= other[5] and item[5] >= other[4] for other in picked):
+                        continue
+                    picked.append(item)
+            if len(picked) < n:
+                label = "outside the cited lines" if slot[1] == "quiet" else "{} {}".format(
+                    slot[0], "harmless edits" if slot[1] == "harmless" else "breaks"
+                )
+                self.problems.append("Only {} of {} usable for {} in {}.".format(len(picked), n, label, file_diff.path))
+            chosen.extend(picked)
+
+        plants: List[Plant] = []
+        for kind, pid, proposal, new_text, start, end in chosen:
+            plants.append(
+                Plant(
+                    id="p{:02d}".format(first_number + len(plants)),
+                    kind=kind,
+                    description=str(proposal.get("description") or "").strip(),
+                    file=file_diff.path,
+                    line_start=start,
+                    line_end=end,
+                    patch=file_diff_text(file_diff.path, head_text, new_text),
+                    difficulty=str(proposal.get("difficulty") or "medium"),
+                    breaks=pid if kind != KIND_HARMLESS else None,
+                    near=pid if kind == KIND_HARMLESS else None,
+                    variant_diff=replace_file_in_diff(
+                        change.diff, file_diff.path, file_diff_text(file_diff.path, base_text, new_text)
+                    ),
+                )
+            )
+        if unusable:
+            self.problems.append(
+                "{} of {} edits proposed for {} were unusable.".format(unusable, len(proposals), file_diff.path)
             )
         return plants
 

@@ -6,6 +6,8 @@ import argparse
 import json
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 from typing import List, Optional
@@ -17,6 +19,7 @@ from .config import KeysFileInRepoError, MissingKeyError, load_settings, require
 from .controls import cited_targets, first_reviews, run_controls, summarise
 from .llm import ChatClient, ModelError
 from .models import KIND_BUG, PLANT_KINDS, Plant, RequirementPoint
+from .objectives import approved_points, latest_approval
 from .planter import PLANT_REPLY_TOKENS, ModelPlanter
 from .reviewer import MAX_DIFF_CHARS, MAX_REPLY_TOKENS, ModelReviewer
 from .stats import floor_if_all_caught
@@ -71,6 +74,18 @@ def load_plants(path: Path, change_id: str):
     return plants, (data.get("altered_requirement") or None), points
 
 
+def load_points(path: Path, change_id: str) -> List[RequirementPoint]:
+    """The requirement points from an earlier run or plants file of the same change."""
+    data = json.loads(path.read_text())
+    owner = data.get("change_id") or (data.get("change") or {}).get("id")
+    if owner != change_id:
+        raise ValueError("it belongs to {}, not {}".format(owner, change_id))
+    points = [RequirementPoint(id=item["id"], text=item["text"]) for item in data.get("requirement_points", [])]
+    if not points:
+        raise ValueError("it holds no requirement points")
+    return points
+
+
 def whole_number(settings, name: str, default: int) -> int:
     try:
         return max(1, int(settings.get(name) or default))
@@ -81,7 +96,7 @@ STEPS = (
     "Load the change and its requirement",
     "Split the requirement into checkable points",
     "Review the real change, twice, with every reviewer",
-    "Plant {plants} variants ({kinds}) inside the lines the reviewers cited",
+    "Plant the variants inside the lines the reviewers cited",
     "Review every variant blind, each in a fresh session",
     "Match findings to planted locations",
     "Rerun the review with the requirement altered",
@@ -110,6 +125,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--plants-from", metavar="FILE",
         help="reuse the planted variants saved by an earlier run (a *__plants__*.json file) instead of planting new ones",
     )
+    parser.add_argument(
+        "--per-point", type=int, metavar="N",
+        help="paired planting: N breaks and N harmless edits inside each point's cited lines (replaces --plants and --kinds)",
+    )
+    parser.add_argument(
+        "--silence", type=int, default=2, metavar="N",
+        help="with --per-point: N extra breaks in changed lines nobody cited (default: 2)",
+    )
+    parser.add_argument(
+        "--points-from", metavar="FILE",
+        help="reuse the requirement points of an earlier run or plants file instead of writing new ones",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the plan and settings status, then exit")
     parser.add_argument(
         "--debug", action="store_true",
@@ -137,11 +164,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("Change: {}".format(args.change))
     for number, step in enumerate(STEPS, start=1):
         print("  {}. {}".format(number, step.format(plants=args.plants, kinds=", ".join(args.kinds), out=args.out)))
-    print(
-        "If all {} planted defects are caught, the supported claim is a catch rate of at least {:.0%}.".format(
-            args.plants, floor_if_all_caught(args.plants)
-        )
-    )
+    if args.per_point:
+        print("Paired planting: {0} breaks and {0} harmless edits per point, {1} breaks elsewhere.".format(args.per_point, args.silence))
+    else:
+        defects = sum(1 for i in range(args.plants) if args.kinds[i % len(args.kinds)] != "harmless")
+        if defects:
+            print(
+                "If all {} planted defects are caught, the supported claim is a catch rate of at least {:.0%}.".format(
+                    defects, floor_if_all_caught(defects)
+                )
+            )
 
     prefixes = reviewer_prefixes(settings)
     if args.dry_run:
@@ -187,42 +219,74 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
     plants_saved = bool(args.plants_from)
 
+    # The objectives: an owner's approval wins, then points reused from an earlier run, then a fresh split.
+    risky: List[str] = []
+    approval = latest_approval(Path(args.out), change.id) if plants is None else None
+    if approval:
+        points, risky = approved_points(approval)
+        print("Using the objectives approved by {} at {}".format(approval["name"], approval["approved_at"]))
+    elif args.points_from and plants is None:
+        try:
+            points = load_points(Path(args.points_from), change.id)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            print("error: cannot reuse requirement points from {}: {}".format(args.points_from, error), file=sys.stderr)
+            return 2
+        print("Reusing {} requirement points from {}".format(len(points), args.points_from))
+
     # Review the real change with every reviewer first, then plant once, inside the lines
     # any of them cited. Each reviewer is then tested on breaks of what it pointed at.
     firsts = {}
     if plants is None:
-        print("Splitting the requirement into points")
-        try:
-            points = planter.split_requirement(change)
-        except ModelError as error:
-            points = []
-            print("  note: the requirement could not be split into points: {}".format(error))
+        if points is None:
+            print("Splitting the requirement into points")
+            try:
+                points = planter.split_requirement(change)
+            except ModelError as error:
+                points = []
+                print("  note: the requirement could not be split into points: {}".format(error))
         for reviewer, _ in reviewers:
             print("--- First review: {}".format(reviewer.name))
             firsts[reviewer.name] = first_reviews(change, reviewer, points, progress=print)
         targets = cited_targets([original for original, _ in firsts.values()])
-        print("Planting {} variants ({}) inside the cited lines".format(args.plants, ", ".join(args.kinds)))
-        plants = planter.plant(change, args.plants, args.kinds, points, targets)
+        if args.per_point:
+            print("Planting {0} breaks and {0} harmless edits per point, {1} elsewhere".format(args.per_point, args.silence))
+            plants = planter.plant_per_point(change, points, targets, args.per_point, args.silence, risky)
+        else:
+            print("Planting {} variants ({}) inside the cited lines".format(args.plants, ", ".join(args.kinds)))
+            plants = planter.plant(change, args.plants, args.kinds, points, targets)
         for problem in planter.problems:
             print("  note: {}".format(problem))
 
-    lines = []
-    for reviewer, workers in reviewers:
-        print("--- Reviewer: {}".format(reviewer.name))
+    # One altered requirement for every reviewer, written before they run side by side.
+    if altered is None:
+        try:
+            altered = planter.alter_requirement(change)
+        except ModelError as error:
+            print("  note: could not write an altered requirement: {}".format(error))
+    if not plants_saved and plants:
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+        plants_path = out_dir / "{}__plants__{}.json".format(slug(change.id), stamp)
+        save_plants(plants_path, change.id, planter.name, plants, altered, points)
+        print("Planted variants saved for reuse: {}".format(plants_path))
+
+    def run_one(entry):
+        reviewer, workers = entry
+        print("--- Reviewer: {} (reviewing {} variants)".format(reviewer.name, len(plants or [])))
         original, repeat = firsts.get(reviewer.name, (None, None))
-        report = run_controls(
+        return run_controls(
             change, planter, reviewer,
-            count=args.plants, kinds=args.kinds, workers=workers, progress=print,
+            count=args.plants, kinds=args.kinds, workers=workers,
+            progress=lambda message: print("  [{}] {}".format(reviewer.name, message.strip())),
             plants=plants, altered_requirement=altered, points=points,
             original_review=original, repeat_review=repeat,
         )
-        altered = report.altered_requirement or altered
-        if not plants_saved and plants:
-            plants_path = out_dir / "{}__plants__{}.json".format(slug(change.id), report.created_at.replace(":", ""))
-            save_plants(plants_path, change.id, report.planter, plants, altered, points)
-            print("Planted variants saved for reuse: {}".format(plants_path))
-            plants_saved = True
 
+    # The reviewers are different services, so they are tested at the same time.
+    with ThreadPoolExecutor(max_workers=max(1, len(reviewers))) as pool:
+        reports = list(pool.map(run_one, reviewers))
+
+    lines = []
+    for report in reports:
         stem ="{}__{}__{}".format(slug(change.id), slug(report.reviewer), report.created_at.replace(":", ""))
         card_path = out_dir / (stem + ".card.md")
         (out_dir / (stem + ".json")).write_text(json.dumps(report.to_dict(), indent=2))

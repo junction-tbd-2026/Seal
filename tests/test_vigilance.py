@@ -4,7 +4,11 @@ import unittest
 from pathlib import Path
 
 from reviewer_controls.exam import build_exam, signoffs_for
+from reviewer_controls.objectives import record_approval
 from reviewer_controls.vigilance import Vigilance, pick_spot_check
+
+PROPOSED = [{"id": "R1", "text": "Values above max come back as max."}]
+ALL_ANSWERED = {"spots": [{"plant_id": "p02", "verdict": "right"}], "points": {"R1": "met"}, "findings": {}}
 
 REAL = (
     "diff --git a/src/A.cs b/src/A.cs\n--- a/src/A.cs\n+++ b/src/A.cs\n"
@@ -86,7 +90,10 @@ class VigilanceTests(unittest.TestCase):
         self.assertEqual(signoffs_for(self.results, "c1"), [])
         self.assertEqual((result["record"]["checked"], result["record"]["caught"]), (1, 0))
 
-        real = vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "accept")
+        with self.assertRaises(ValueError):    # the real change cannot be accepted before the objectives are approved
+            vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "accept", **ALL_ANSWERED)
+        record_approval(self.results, "c1", PROPOSED, "Pat (product owner)", [{"id": "R1", "decision": "keep"}])
+        real = vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "accept", **ALL_ANSWERED)
         self.assertFalse(real["spot_check"])
         self.assertEqual([(e["name"], e["decision"]) for e in signoffs_for(self.results, "c1")], [("Ada", "accept")])
 
@@ -97,16 +104,39 @@ class VigilanceTests(unittest.TestCase):
         self.assertEqual((result["caught"], result["spotted"]), (True, True))
         missed = Vigilance(self.results)
         result = missed.sign(missed.open("c1")["session"], "big", "Bob", "reject", [{"plant_id": "p02", "verdict": "right"}])
-        self.assertEqual((result["caught"], result["spotted"]), (True, False))   # refused it, but called the planted spot right
+        self.assertEqual((result["caught"], result["refused"], result["spotted"]), (False, True, False))   # refused it, but called the planted spot right
         same_lines = Vigilance(self.results)
         result = same_lines.sign(same_lines.open("c1")["session"], "big", "Eve", "reject", [{"plant_id": "p01", "verdict": "wrong"}])
         self.assertEqual((result["caught"], result["spotted"]), (True, True))    # another planted edit on the same lines is the same place
 
-    def test_spot_verdicts_are_kept_with_a_real_sign_off(self):
+    def test_every_answer_is_kept_with_a_real_sign_off(self):
+        record_approval(self.results, "c1", PROPOSED, "Pat", [{"id": "R1", "decision": "keep"}])
         vigilance = Vigilance(self.results, enabled=False)
         spots = [{"plant_id": "p02", "verdict": "right"}, {"plant_id": "p01", "verdict": "nonsense"}]
-        vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "accept", spots)
-        self.assertEqual(signoffs_for(self.results, "c1")[0]["spots"], [{"plant_id": "p02", "verdict": "right"}])
+        vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "accept", spots, {"R1": "cannot_tell", "R9": "maybe"}, {})
+        entry = signoffs_for(self.results, "c1")[0]
+        self.assertEqual(entry["spots"], [{"plant_id": "p02", "verdict": "right"}])
+        self.assertEqual(entry["points"], {"R1": "cannot_tell"})
+        self.assertIsNotNone(entry["seconds"])
+
+    def test_the_server_refuses_an_accept_the_page_should_not_have_allowed(self):
+        record_approval(self.results, "c1", PROPOSED, "Pat", [{"id": "R1", "decision": "keep"}])
+        vigilance = Vigilance(self.results, enabled=False)
+        for spots, points in (([], {"R1": "met"}), ([{"plant_id": "p02", "verdict": "wrong"}], {"R1": "met"}),
+                              ([{"plant_id": "p02", "verdict": "right"}], {}), ([{"plant_id": "p02", "verdict": "right"}], {"R1": "not_met"})):
+            with self.assertRaises(ValueError):
+                vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "accept", spots, points, {})
+        self.assertEqual(signoffs_for(self.results, "c1"), [])
+        vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "reject")   # rejecting needs none of it
+        self.assertEqual(len(signoffs_for(self.results, "c1")), 1)
+
+    def test_the_page_never_gets_the_text_of_a_planted_edit_it_asks_about(self):
+        shown = Vigilance(self.results, enabled=False).open("c1")
+        hidden = [p for p in shown["plants"] if p["hidden"]]
+        self.assertEqual({p["id"] for p in hidden}, {"p01", "p02"})
+        self.assertTrue(all(p["description"] == "" and p["patch"] == [] for p in hidden))
+        self.assertNotIn("d-p01", json.dumps(shown))
+        self.assertNotIn("d-p02", json.dumps(shown))
 
     def test_proof_that_is_only_a_test_is_flagged(self):
         data = run("big", "2026-11-14T05:00:00Z", self.plants, set())
@@ -115,11 +145,11 @@ class VigilanceTests(unittest.TestCase):
         big = [r for r in build_exam(self.results, "c1")["reviewers"] if r["name"] == "big"][0]
         self.assertTrue(big["points"][0]["tests_only"])
 
-    def test_rejecting_a_planted_copy_counts_as_a_catch(self):
+    def test_asking_for_a_full_read_without_finding_the_spot_is_not_a_catch(self):
         vigilance = Vigilance(self.results)
         result = vigilance.sign(vigilance.open("c1")["session"], "big", "Grace", "full_read")
-        self.assertTrue(result["caught"])
-        self.assertEqual(vigilance.record()["caught"], 1)
+        self.assertEqual((result["caught"], result["refused"]), (False, True))
+        self.assertEqual(vigilance.record()["caught"], 0)
 
     def test_a_session_signs_once_and_an_empty_name_decides_nothing(self):
         vigilance = Vigilance(self.results)
@@ -140,7 +170,7 @@ class VigilanceTests(unittest.TestCase):
         self.assertEqual(self.shown(on.open("c1")), ["if (value < max)"])
 
     def test_only_a_share_of_pull_requests_is_spot_checked_and_the_choice_sticks(self):
-        draws = iter([0.9, 0.1])
+        draws = iter([0.9, 0.1, 0.0])
         vigilance = Vigilance(self.results, rate=0.5, rng=lambda: next(draws))
         self.assertEqual(self.shown(vigilance.open("c1")), ["if (value > max)"])   # 0.9: not picked
         self.assertEqual(self.shown(vigilance.open("c1")), ["if (value > max)"])   # and it stays that way
