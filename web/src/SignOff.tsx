@@ -5,12 +5,35 @@ import type { SignOff } from "./types";
 
 const DECISIONS = [
   { value: "accept", label: "Accept", style: "bg-caught text-white" },
-  { value: "full_read", label: "Full read", style: "bg-warn" },
+  { value: "full_read", label: "Ask for a full read", style: "bg-warn" },
   { value: "reject", label: "Reject", style: "bg-missed text-white" },
 ];
 
+function StepRow({ step, state, onGoTo }: { step: Step; state: StepState; onGoTo: (stepId: string) => void }) {
+  const title = stepLabel(step).title;
+  return (
+    <li>
+      <button type="button" onClick={() => onGoTo(step.id)} className="group flex w-full items-baseline gap-3 rounded-md px-2 py-1.5 text-left hover:bg-canvas">
+        <span
+          className={`grid h-5 w-5 shrink-0 translate-y-1 place-items-center rounded-full text-[10.5px] font-extrabold ${
+            state.flagged ? "bg-missed text-white" : state.done ? "bg-caught text-white" : "bg-canvas text-soft"
+          }`}
+          aria-hidden="true"
+        >
+          {state.flagged ? "!" : state.done ? "✓" : ""}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{step.kind === "point" ? `${step.point.id} · ${title}` : title}</span>
+        <span className={`shrink-0 text-[12.5px] ${state.flagged ? "font-bold text-missed" : "text-soft"}`}>
+          {state.answer ?? <span className="font-bold text-brand group-hover:underline">Open →</span>}
+        </span>
+      </button>
+    </li>
+  );
+}
+
 /**
- * The last step: what the person checked, and their name on a decision.
+ * The last step. It shows only what stands between the person and a decision:
+ * the steps still open, or what they marked wrong. What is already done is folded away.
  * Accept needs every earlier step done and nothing marked wrong. Reject and full read are always open.
  */
 export function SignOffStep({
@@ -32,8 +55,10 @@ export function SignOffStep({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const open = steps.filter((_, index) => !states[index].done);
-  const flagged = steps.filter((_, index) => states[index].flagged);
+  const rows = steps.map((step, index) => ({ step, state: states[index] }));
+  const open = rows.filter((row) => !row.state.done);
+  const flagged = rows.filter((row) => row.state.flagged);
+  const finished = rows.filter((row) => row.state.done && !row.state.flagged);
   const blocked = open.length > 0 || flagged.length > 0;
 
   const sign = async (decision: string) => {
@@ -50,101 +75,78 @@ export function SignOffStep({
   };
 
   return (
-    <div className="thin-scroll min-h-0 flex-1 overflow-y-auto bg-canvas p-4">
-      <div className="mx-auto max-w-2xl space-y-3">
-        <section className="rounded-lg border-2 border-ink bg-panel">
-          <h3 className="border-b-2 border-ink px-4 py-2 text-[11px] font-bold uppercase tracking-[0.12em] text-soft">What you checked</h3>
-          <ul>
-            {steps.map((step, index) => {
-              const state = states[index];
-              const label = stepLabel(step);
-              return (
-                <li key={step.id} className="border-b border-hair last:border-b-0">
-                  <button type="button" onClick={() => onGoTo(step.id)} className="flex w-full items-start gap-3 px-4 py-2 text-left hover:bg-canvas">
-                    <span
-                      className={`mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded border-2 border-ink text-[11px] font-extrabold ${
-                        state.flagged ? "bg-missed text-white" : state.done ? "bg-caught text-white" : "bg-panel"
-                      }`}
-                      aria-hidden="true"
-                    >
-                      {state.flagged ? "!" : state.done ? "✓" : ""}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[13px] font-bold leading-snug">
-                        {step.kind === "point" && <span className="mr-1.5 font-mono text-[11px] text-faint">{step.point.id}</span>}
-                        {label.title}
-                      </span>
-                      <span className={`block text-[12px] ${state.flagged ? "font-bold text-missed" : state.done ? "text-soft" : "font-bold text-ink"}`}>
-                        {state.answer ?? "Not checked yet"}
-                        {!state.done && state.answer ? " · not finished" : ""}
-                      </span>
-                    </span>
-                    {!state.done && <span className="shrink-0 text-[11.5px] font-bold text-brand underline decoration-2 underline-offset-2">Go to step</span>}
-                  </button>
-                </li>
-              );
-            })}
+    <div className="thin-scroll min-h-0 flex-1 overflow-y-auto bg-canvas">
+      <div className="max-w-2xl space-y-4 px-8 py-6">
+        {mine.length > 0 && (
+          <ul className="rounded-lg border-2 border-ink bg-caught-wash px-5 py-3 text-[13.5px]">
+            {mine.slice(-3).map((entry, index) => (
+              <li key={`${entry.signed_at}-${index}`}>
+                <span className="font-bold">{decisionText(entry.decision)}</span> by {entry.name}, {formatWhen(entry.signed_at)}
+              </li>
+            ))}
           </ul>
-        </section>
+        )}
 
-        <section className="rounded-lg border-2 border-ink bg-brand-wash px-4 py-4 shadow-[var(--shadow-hard)]">
-          {mine.length > 0 && (
-            <ul className="mb-3 space-y-0.5 border-b-2 border-ink pb-3 text-[12.5px]">
-              {mine.slice(-3).map((entry, index) => (
-                <li key={`${entry.signed_at}-${index}`}>
-                  <span className="font-bold">{decisionText(entry.decision)}</span> by {entry.name}, {formatWhen(entry.signed_at)}
-                </li>
+        {blocked && (
+          <section className="rounded-lg border-2 border-ink bg-panel px-5 py-4">
+            <h3 className="text-[15px] font-bold">
+              {flagged.length > 0
+                ? "You marked something as wrong, so this cannot be accepted"
+                : `${open.length === 1 ? "One step is" : `${open.length} steps are`} left before you can accept`}
+            </h3>
+            <ul className="-mx-2 mt-2">
+              {(flagged.length > 0 ? flagged : open).map((row) => (
+                <StepRow key={row.step.id} {...row} onGoTo={onGoTo} />
               ))}
             </ul>
-          )}
-          <label htmlFor="signer" className="text-[11px] font-bold uppercase tracking-[0.12em] text-soft">
-            I own this decision
+          </section>
+        )}
+
+        <section className="rounded-lg border-2 border-ink bg-panel px-5 py-5 shadow-[var(--shadow-hard)]">
+          <label htmlFor="signer" className="text-[15px] font-bold">
+            {blocked ? "Or decide now" : "Everything is checked. Your decision?"}
           </label>
-          <p className="text-[12px] leading-snug text-soft">The code shown may be a spot-check copy with a planted mistake.</p>
           <input
             id="signer"
             value={name}
             onChange={(event) => setName(event.target.value)}
             autoComplete="name"
             placeholder="Your name"
-            className="mt-1.5 w-full rounded-md border-2 border-ink bg-panel px-2.5 py-1.5 text-[14px] font-medium placeholder:text-faint"
+            className="mt-3 w-full rounded-md border-2 border-ink bg-panel px-3 py-2 text-[14.5px] font-medium placeholder:text-faint"
           />
-          <div className="mt-2 grid grid-cols-3 gap-2">
-            {DECISIONS.map((decision) => (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {DECISIONS.filter((decision) => decision.value !== "accept" || !blocked).map((decision) => (
               <button
                 key={decision.value}
                 type="button"
-                disabled={busy || !name.trim() || (decision.value === "accept" && blocked)}
-                title={decision.value === "accept" && blocked ? "Finish every step first, with nothing marked wrong" : undefined}
+                disabled={busy || !name.trim()}
                 onClick={() => sign(decision.value)}
-                className={`press rounded-md px-2 py-2 text-[14px] font-bold ${decision.style}`}
+                className={`press rounded-md px-4 py-2 text-[14px] font-bold ${decision.style} ${decision.value === "accept" ? "flex-1" : ""}`}
               >
                 {decision.label}
               </button>
             ))}
           </div>
-          {flagged.length > 0 ? (
-            <p className="mt-2 text-[12.5px] font-medium leading-snug">
-              You marked something as wrong in {flagged.length === 1 ? "one step" : `${flagged.length} steps`}, so this cannot be accepted. Reject it or ask for
-              a full read.
-            </p>
-          ) : open.length > 0 ? (
-            <p className="mt-2 text-[12.5px] font-medium leading-snug">
-              Accept unlocks once {open.length === 1 ? "the remaining step is" : `the ${open.length} remaining steps are`} done.{" "}
-              <button type="button" onClick={() => onGoTo(open[0].id)} className="font-bold text-brand underline decoration-2 underline-offset-2">
-                Go to the next open step
-              </button>
-              . You can reject or ask for a full read at any time.
-            </p>
-          ) : (
-            <p className="mt-2 text-[12.5px] font-medium leading-snug">Every step is done and nothing is marked wrong. You can accept.</p>
-          )}
           {error && (
-            <p role="alert" className="mt-2 text-[12.5px] font-medium text-missed">
+            <p role="alert" className="mt-3 text-[13px] font-medium text-missed">
               {error}
             </p>
           )}
         </section>
+
+        {finished.length > 0 && (
+          <details className="group text-[13px]" open={!blocked}>
+            <summary className="cursor-pointer list-none px-1 font-bold text-soft hover:text-ink">
+              What you checked ({finished.length}) <span className="group-open:hidden">+</span>
+              <span className="hidden group-open:inline">−</span>
+            </summary>
+            <ul className="mt-1">
+              {finished.map((row) => (
+                <StepRow key={row.step.id} {...row} onGoTo={onGoTo} />
+              ))}
+            </ul>
+          </details>
+        )}
       </div>
     </div>
   );

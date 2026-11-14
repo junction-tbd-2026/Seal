@@ -138,7 +138,10 @@ export type PointStep = {
   spots: Plant[];
   tone: Tone;
   chip: string;
+  /** What the reviewer says and how that answer did on our test. */
   why: string;
+  /** What the person is asked to do. */
+  todo: string;
 };
 
 export type Step =
@@ -148,21 +151,30 @@ export type Step =
   | { id: "findings"; kind: "findings"; findings: Finding[] }
   | { id: "sign"; kind: "sign" };
 
-const times = (count: number) => `${count} ${count === 1 ? "time" : "times"}`;
-
-/** How far the reviewer's answer on one point can be believed, in one chip and one sentence. */
-function describePoint(point: PointView, spots: Plant[]): { tone: Tone; chip: string; why: string } {
+/** How far the reviewer's answer on one point can be believed, and what that asks of the person. */
+function describePoint(point: PointView, spots: Plant[]): { tone: Tone; chip: string; why: string; todo: string } {
+  const redSpots = spots.length === 1 ? "the red spot" : `the ${spots.length} red spots`;
   if (point.status === "not_met") {
-    return { tone: "risk", chip: "Reviewer says not met", why: "The reviewer says the change does not do this. Check whether it is right." };
+    return {
+      tone: "risk",
+      chip: "Says not met",
+      why: "The reviewer says the change does not do this.",
+      todo: spots.length > 0 ? `Check ${redSpots}, then decide whether it is right.` : "Read the lines and decide whether it is right.",
+    };
   }
   const missed = spots.length > 0 || point.noticed === "no" || point.noticed === "partly";
   if (missed) {
+    const claim = point.status === "met" ? "The reviewer says this is met, but it" : "The reviewer could not tell, and it";
     const tested =
       point.broken_total > 0
-        ? `We broke the lines it cites ${times(point.broken_total)}. It noticed ${point.broken_noticed}.`
-        : `It missed ${spots.length === 1 ? "a break" : `${spots.length} breaks`} we planted against this point.`;
-    const claim = point.status === "met" ? "The reviewer says this is met, but its check failed our test. " : "The reviewer could not tell. ";
-    return { tone: "risk", chip: "Reviewer missed our breaks", why: `${claim}${tested} Its answer is worth little here.` };
+        ? `missed ${point.broken_total - point.broken_noticed} of the ${point.broken_total} breaks we planted in the lines it cites.`
+        : `missed ${spots.length === 1 ? "a break" : `${spots.length} breaks`} we planted against this point.`;
+    return {
+      tone: "risk",
+      chip: "Missed our breaks",
+      why: `${claim} ${tested}`,
+      todo: spots.length > 0 ? `Check ${redSpots} yourself, then decide.` : "Read the lines closely, then decide.",
+    };
   }
   if (point.status === "cannot_tell") {
     const cited = point.broad_evidence
@@ -170,31 +182,39 @@ function describePoint(point: PointView, spots: Plant[]): { tone: Tone; chip: st
       : point.dropped_evidence
         ? " It cited lines that are not in this change."
         : "";
-    return { tone: "unproven", chip: "Reviewer can't tell", why: `The reviewer did not decide this point.${cited} A person decides.` };
+    return { tone: "unproven", chip: "Can't tell", why: `The reviewer could not decide this point.${cited}`, todo: "Decide it yourself." };
   }
   if (point.noticed === "unstable") {
     return {
       tone: "unproven",
-      chip: "Answer not stable",
-      why: "The reviewer says this is met, but it answered differently on two identical reviews. Its answer means little here.",
+      chip: "Unstable answer",
+      why: "The reviewer says this is met, but it answered differently on two identical reviews.",
+      todo: "Read the lines and decide yourself.",
     };
   }
   if (point.tests_only) {
-    return { tone: "unproven", chip: "Proof is only a test", why: "The reviewer says this is met, but every line it cites is in a test, and the tests were not run." };
+    return {
+      tone: "unproven",
+      chip: "Only a test as proof",
+      why: "The reviewer says this is met, but every line it cites is in a test, and the tests were not run.",
+      todo: "Read the lines and decide yourself.",
+    };
   }
   if (point.noticed === "yes") {
     return {
       tone: "verified",
       chip: "Held up",
-      why: `The reviewer says this is met. We broke the lines it cites ${times(point.broken_total)} and it noticed every time.`,
+      why: `The reviewer says this is met, and it noticed ${point.broken_total === 1 ? "the break" : `all ${point.broken_total} breaks`} we planted in the lines it cites.`,
+      todo: "Read the lines and confirm.",
     };
   }
   return {
     tone: "unproven",
     chip: "Not tested",
     why: point.aimed_elsewhere
-      ? "The reviewer says this is met, but our breaks for this point fell outside the lines it cites, so its answer is untested."
-      : "The reviewer says this is met, but we planted nothing against this point, so its answer is untested.",
+      ? "The reviewer says this is met, but our breaks fell outside the lines it cites, so that answer is untested."
+      : "The reviewer says this is met, but we planted nothing against this point, so that answer is untested.",
+    todo: "Read the lines and decide yourself.",
   };
 }
 
@@ -294,7 +314,7 @@ export function stepState(step: Step, progress: Progress, signed: SignOff | null
 export function stepLabel(step: Step): { eyebrow: string; title: string } {
   switch (step.kind) {
     case "intro":
-      return { eyebrow: "Before you start", title: "How far can you trust this reviewer?" };
+      return { eyebrow: "Before you start", title: "How much is the AI reviewer's opinion worth?" };
     case "point":
       return { eyebrow: `Requirement ${step.point.id}`, title: step.point.text };
     case "spots":

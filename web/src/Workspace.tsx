@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { motion } from "motion/react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DiffView, type Mark } from "./DiffView";
 import { fileName, prettyModel, sameFile } from "./lib";
 import {
@@ -23,30 +24,27 @@ import { ReviewerTest } from "./ReviewerTest";
 import { SignOffStep } from "./SignOff";
 import { StepList } from "./StepList";
 import { Choice, FindingsBody, PointBody, SpotsBody } from "./StepPanel";
-import type { Exam, PointStatus, Reviewer, SignOff, SpotVerdict } from "./types";
+import type { Exam, Reviewer, SignOff, SpotVerdict } from "./types";
 
 type View = "step" | "whole";
 
-const STATUS: Record<PointStatus, { label: string; style: string }> = {
-  met: { label: "Met", style: "bg-caught text-white" },
-  not_met: { label: "Not met", style: "bg-missed text-white" },
-  cannot_tell: { label: "Can't tell", style: "bg-warn text-ink" },
+const TONE_CHIP: Record<Tone, string> = {
+  verified: "bg-caught text-white",
+  unproven: "bg-warn text-ink",
+  risk: "bg-missed text-white",
 };
 
-const TONE: Record<Tone, { chip: string; wash: string }> = {
-  verified: { chip: "bg-caught text-white", wash: "bg-caught-wash" },
-  unproven: { chip: "bg-warn text-ink", wash: "bg-warn-wash" },
-  risk: { chip: "bg-missed text-white", wash: "bg-missed-wash" },
-};
+/** How long a finished step stays on screen before the next one opens by itself. */
+const ADVANCE_MS = 700;
 
 const CONFIRM_OPTIONS: { value: PointAnswer; label: string; good: boolean }[] = [
-  { value: "met", label: "Confirm: met", good: true },
-  { value: "not_met", label: "I disagree", good: false },
+  { value: "met", label: "Yes, confirm", good: true },
+  { value: "not_met", label: "No, I disagree", good: false },
 ];
 
 const DECIDE_OPTIONS: { value: PointAnswer; label: string; good: boolean }[] = [
-  { value: "met", label: "Met", good: true },
-  { value: "not_met", label: "Not met", good: false },
+  { value: "met", label: "Yes, it is met", good: true },
+  { value: "not_met", label: "No, not met", good: false },
 ];
 
 /** Sets an answer, or takes it back when the same answer is pressed again. */
@@ -57,19 +55,19 @@ function toggled<T extends string>(record: Record<string, T>, id: string, value:
   return next;
 }
 
-/** One line under the step title, for the steps that are not a requirement point. */
-function stepHint(step: Step, reviewer: Reviewer): string | null {
+/** The one sentence under the step title that says what to do here. */
+function stepTask(step: Step, reviewer: Reviewer): string {
   switch (step.kind) {
     case "intro":
-      return "See what the reviewer said and how it did when we tested it. Then go through the requirement one point at a time.";
+      return "Before you check anything yourself, see what the reviewer said and how it did on our test.";
+    case "point":
+      return step.todo;
     case "spots":
-      return `${prettyModel(reviewer.name)} missed breaks we planted at these places. They are not known bugs, but its silence there is worth nothing, so read them yourself.`;
+      return `${prettyModel(reviewer.name)} missed mistakes we planted here in test copies. Say whether the real code looks right.`;
     case "findings":
       return "These are in the real code, not in our test copies. Say whether each one is a real problem.";
     case "sign":
-      return "Your name goes on this decision.";
-    default:
-      return null;
+      return "Put your name on a decision.";
   }
 }
 
@@ -83,10 +81,7 @@ export function Workspace({
   reviewer,
   code,
   signoffs,
-  summary,
   header,
-  compare,
-  onCompare,
   onReviewer,
   onSign,
   onSaved,
@@ -96,10 +91,7 @@ export function Workspace({
   /** Fingerprint of the code on screen. */
   code: string;
   signoffs: SignOff[];
-  summary: string;
   header: React.ReactNode;
-  compare: boolean;
-  onCompare: () => void;
   onReviewer: (name: string) => void;
   onSign: (name: string, decision: string, spots: { plant_id: string; verdict: SpotVerdict }[]) => Promise<void>;
   /** Called after the saved checks change, so the list of pull requests can show progress. */
@@ -180,41 +172,62 @@ export function Workspace({
   }, [exam, reviewer, file, step]);
 
   const spotsLeft = step.kind === "point" || step.kind === "spots" ? step.spots.filter((plant) => !progress.spots[plant.id]).length : 0;
-  const hint = stepHint(step, reviewer);
   const shared = { files: exam.change.files, progress, onOpen: showInWhole, onSpot };
 
-  return (
-    <div className="grid h-full grid-cols-[minmax(0,1fr)_21.5rem]">
-      <section className="flex min-h-0 min-w-0 flex-col">
-        {header}
+  // Finishing a step opens the next unfinished one by itself, after a moment to see the answer land.
+  const nextOpen = steps.slice(index + 1).find((_, offset) => !states[index + 1 + offset].done) ?? steps[steps.length - 1];
+  const seen = useRef({ step: step.id, done: state.done });
+  useEffect(() => {
+    const before = seen.current;
+    seen.current = { step: step.id, done: state.done };
+    if (before.step !== step.id || before.done || !state.done) return;
+    if (step.kind === "intro" || step.kind === "sign") return;
+    const timer = window.setTimeout(() => goTo(nextOpen.id), ADVANCE_MS);
+    return () => window.clearTimeout(timer);
+    // Only a step turning from open to done should move on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step.id, state.done]);
 
-        <div className="border-b-2 border-ink bg-panel px-5 py-2.5">
-          <div className="flex items-center justify-between gap-4">
-            <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-soft">
-              Step {index + 1} of {steps.length} · {label.eyebrow}
-            </p>
-            <div className="flex shrink-0 overflow-hidden rounded-md border-2 border-ink text-[12px] font-bold" role="tablist" aria-label="What to show">
-              {(["step", "whole"] as const).map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  role="tab"
-                  aria-selected={view === item}
-                  onClick={() => setView(item)}
-                  className={`px-2.5 py-1 ${item === "whole" ? "border-l-2 border-ink" : ""} ${view === item ? "bg-ink text-white" : "bg-panel hover:bg-brand-wash"}`}
-                >
-                  {item === "step" ? (step.kind === "point" ? "Lines for this step" : "This step") : "Whole change"}
-                </button>
-              ))}
-            </div>
-          </div>
-          <h2 className="mt-1 text-[16.5px] font-bold leading-snug">{label.title}</h2>
-          {hint && <p className="mt-0.5 max-w-4xl text-[13px] leading-snug text-soft">{hint}</p>}
+  const question =
+    step.kind !== "point"
+      ? null
+      : spotsLeft > 0
+        ? null
+        : step.tone === "verified"
+          ? "Do the lines show this is met?"
+          : "Is this met in the real code?";
+
+  return (
+    <div className="grid h-full grid-cols-[minmax(0,1fr)_18.5rem]">
+      <section className="flex min-h-0 min-w-0 flex-col bg-panel">
+        <div className="border-b border-hair px-8 pb-5 pt-4">
+          {header}
+          <p className="mt-5 flex items-center gap-2 text-[12.5px] font-bold text-soft">
+            Step {index + 1} of {steps.length}
+            {step.kind === "point" && <span className={`rounded-sm px-1.5 py-px text-[11px] ${TONE_CHIP[step.tone]}`}>{step.chip}</span>}
+          </p>
+          <h1 className="mt-1.5 max-w-3xl text-[22px] font-extrabold leading-tight tracking-tight">
+            {step.kind === "point" && <span className="mr-2 font-mono text-[15px] font-bold text-faint">{step.point.id}</span>}
+            {label.title}
+          </h1>
+          <p className="mt-2 max-w-3xl text-[14.5px] leading-snug">
+            {step.kind === "point" && <span className="text-soft">{step.why} </span>}
+            <span className="font-bold">{stepTask(step, reviewer)}</span>
+          </p>
+          {step.kind === "point" && step.point.reason && (
+            <details className="group mt-2 max-w-3xl text-[13px] leading-snug text-soft">
+              <summary className="cursor-pointer list-none font-medium text-faint hover:text-ink">
+                <span className="group-open:hidden">Show the reviewer's reasoning</span>
+                <span className="hidden group-open:inline">Hide the reviewer's reasoning</span>
+              </summary>
+              <p className="mt-1 border-l-2 border-hair pl-3">“{step.point.reason}”</p>
+            </details>
+          )}
         </div>
 
         {view === "whole" ? (
           <>
-            <div className="thin-scroll flex gap-1.5 overflow-x-auto border-b-2 border-ink bg-canvas px-3 py-2" role="tablist" aria-label="Files in this change">
+            <div className="thin-scroll flex gap-1 overflow-x-auto border-b border-hair bg-canvas px-8 py-2" role="tablist" aria-label="Files in this change">
               {exam.change.files.map((item) => {
                 const toRead = exam.plants.filter((plant) => plant.file === item.path && reviewer.read_yourself.includes(plant.id)).length;
                 const active = item.path === file?.path;
@@ -229,8 +242,8 @@ export function Workspace({
                       setFilePath(item.path);
                       setFocus(null);
                     }}
-                    className={`flex shrink-0 items-center gap-1.5 rounded-md border-2 border-ink px-2.5 py-1 font-mono text-[12px] font-bold ${
-                      active ? "bg-ink text-white" : "bg-panel hover:bg-brand-wash"
+                    className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 font-mono text-[12px] font-bold ${
+                      active ? "bg-ink text-white" : "text-soft hover:bg-panel hover:text-ink"
                     }`}
                   >
                     {fileName(item.path)}
@@ -240,39 +253,11 @@ export function Workspace({
               })}
             </div>
             {file && <DiffView file={file} marks={marks} focus={focus?.line ?? null} key={`${file.path}-${focus?.token ?? 0}`} className="min-h-0 flex-1" />}
-            <p className="border-t-2 border-ink bg-panel px-5 py-1.5 text-[12px] text-soft">
-              <span className="mr-1.5 inline-block h-3 w-1.5 translate-y-0.5 bg-missed" />
-              <strong className="text-ink">Red is not a known bug.</strong> {prettyModel(reviewer.name)} failed to notice when we broke the code there, so check it yourself.
-              <span className="ml-3 mr-1.5 inline-block h-3 w-1.5 translate-y-0.5 bg-brand" />
-              Blue: lines the reviewer cites for this step.
-              <span className="ml-3 mr-1.5 inline-block h-3 w-1.5 translate-y-0.5 bg-warn" />
-              Yellow: a problem the reviewer reported.
-            </p>
           </>
         ) : step.kind === "intro" ? (
-          <ReviewerTest exam={exam} reviewer={reviewer} summary={summary} />
+          <ReviewerTest exam={exam} reviewer={reviewer} />
         ) : step.kind === "point" ? (
-          <PointBody
-            key={step.id}
-            step={step}
-            {...shared}
-            onWholeChange={() => setView("whole")}
-            lead={
-              <div className={`rounded-lg border-2 border-ink px-3 py-2 text-[13px] leading-snug ${TONE[step.tone].wash}`}>
-                <p>
-                  <span className={`mr-1.5 inline-block rounded border-2 border-ink px-1.5 text-[11px] font-bold ${STATUS[step.point.status].style}`}>
-                    Reviewer says: {STATUS[step.point.status].label}
-                  </span>
-                  {/* The second chip is about our test of the reviewer. Without a "met" or a missed break it would only repeat the first. */}
-                  {(step.point.status === "met" || step.spots.length > 0) && (
-                    <span className={`mr-1.5 inline-block rounded border-2 border-ink px-1.5 text-[11px] font-bold ${TONE[step.tone].chip}`}>{step.chip}</span>
-                  )}
-                  <span className="font-medium">{step.why}</span>
-                </p>
-                {step.point.reason && <p className="mt-1 text-[12.5px] text-soft">The reviewer's reason: “{step.point.reason}”</p>}
-              </div>
-            }
-          />
+          <PointBody key={step.id} step={step} {...shared} onWholeChange={() => setView("whole")} />
         ) : step.kind === "spots" ? (
           <SpotsBody spots={step.spots} {...shared} />
         ) : step.kind === "findings" ? (
@@ -294,57 +279,61 @@ export function Workspace({
         )}
 
         {step.kind !== "sign" && (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t-2 border-ink bg-brand-wash px-5 py-2.5">
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5 text-[13px] font-medium leading-snug">
-              {step.kind === "intro" && (
-                <p>
-                  {steps.length} steps. Green points you read and confirm. Yellow and red points you decide yourself. You can take them in any order.
-                </p>
-              )}
-              {step.kind === "point" && (
-                <>
-                  <p>
-                    {spotsLeft > 0
-                      ? `First give a verdict on ${spotsLeft === 1 ? "the red spot" : `the ${spotsLeft} red spots`} in the lines for this step.`
-                      : step.tone === "verified"
-                        ? "The reviewer's answer held up. Do the lines show this is met?"
-                        : "Your decision: is this met in the real code?"}
-                  </p>
+          <div className="flex min-h-[4rem] flex-wrap items-center gap-x-5 gap-y-2 border-t-2 border-ink bg-panel px-8 py-3">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2">
+              {step.kind === "point" && question && (
+                // Unfolds once the red spots are judged, so there is one thing to do at a time.
+                <motion.div
+                  key={step.id}
+                  initial={step.spots.length > 0 ? { opacity: 0, y: 8 } : false}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="flex flex-wrap items-center gap-x-4 gap-y-2"
+                >
+                  <p className="text-[15px] font-bold">{question}</p>
                   <Choice
-                    size="large"
                     value={progress.points[step.point.id]}
                     options={step.tone === "verified" ? CONFIRM_OPTIONS : DECIDE_OPTIONS}
-                    disabled={spotsLeft > 0}
                     onPick={(answer) => onPoint(step.point.id, answer)}
                   />
-                </>
+                </motion.div>
               )}
-              {step.kind === "spots" && (
-                <p>{spotsLeft > 0 ? `${spotsLeft} of ${step.spots.length} ${step.spots.length === 1 ? "spot" : "spots"} still need a verdict.` : "Every spot has a verdict."}</p>
+              {(step.kind === "point" || step.kind === "spots") && spotsLeft > 0 && (
+                <p className="text-[14px] text-soft">
+                  <span className="mr-2 inline-block h-2.5 w-2.5 rounded-full bg-missed" aria-hidden="true" />
+                  {view === "whole" ? "Switch back to the review to judge" : "First judge"} {spotsLeft === 1 ? "the red spot" : `the ${spotsLeft} red spots`}
+                  {view === "whole" ? "." : " above."}
+                </p>
               )}
-              {step.kind === "findings" && (
-                <p>{state.done ? "Every reported problem has your answer." : "Say for each reported problem whether it is real."}</p>
-              )}
+              {step.kind === "findings" && !state.done && <p className="text-[14px] text-soft">Answer each reported problem above.</p>}
+              {state.done && step.kind !== "intro" && step.kind !== "point" && <p className="text-[14px] font-bold text-caught">✓ Done</p>}
             </div>
-            <div className="flex shrink-0 gap-2">
-              <button
-                type="button"
-                disabled={index === 0}
-                onClick={() => goTo(steps[index - 1].id)}
-                className="press rounded-md bg-panel px-3 py-1.5 text-[13px] font-bold"
-              >
-                ← Back
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (step.kind === "intro" && !progress.intro) check(() => ({ intro: true }));
-                  goTo(steps[index + 1].id);
-                }}
-                className={`press rounded-md px-3 py-1.5 text-[13px] font-bold ${state.done || step.kind === "intro" ? "bg-warn" : "bg-panel"}`}
-              >
-                {step.kind === "intro" && !state.done ? "I have read this. Start the checks →" : state.done ? "Next step →" : "Skip for now →"}
-              </button>
+            <div className="flex shrink-0 items-center gap-4">
+              {index > 0 && (
+                <button type="button" onClick={() => goTo(steps[index - 1].id)} className="text-[13px] font-medium text-soft underline-offset-2 hover:text-ink hover:underline">
+                  Back
+                </button>
+              )}
+              {step.kind === "intro" ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!progress.intro) check(() => ({ intro: true }));
+                    goTo(nextOpen.id);
+                  }}
+                  className="press rounded-md bg-warn px-4 py-2 text-[14px] font-bold"
+                >
+                  {progress.intro ? "Continue →" : "Start the review →"}
+                </button>
+              ) : state.done ? (
+                <button type="button" onClick={() => goTo(nextOpen.id)} className="press rounded-md bg-warn px-4 py-2 text-[14px] font-bold">
+                  Next →
+                </button>
+              ) : (
+                <button type="button" onClick={() => goTo(steps[index + 1].id)} className="text-[13px] font-medium text-soft underline-offset-2 hover:text-ink hover:underline">
+                  Skip for now
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -357,8 +346,8 @@ export function Workspace({
         states={states}
         current={step.id}
         stale={stale}
-        compare={compare}
-        onCompare={onCompare}
+        view={view}
+        onView={setView}
         onGoTo={goTo}
         onReviewer={onReviewer}
         onClear={() => {
