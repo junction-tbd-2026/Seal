@@ -30,11 +30,14 @@ export function DiffView({
   file,
   marks = [],
   focus,
+  tags = true,
   className = "",
 }: {
   file: FileDiff;
   marks?: Mark[];
   focus?: number | null;
+  /** Label the first line of each mark. Off for short excerpts that already say what they are. */
+  tags?: boolean;
   className?: string;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -52,7 +55,7 @@ export function DiffView({
       ? undefined
       : marks.find((mark) => mark.tone === "blind" && n >= mark.start && n <= mark.end) ??
         marks.find((mark) => n >= mark.start && n <= mark.end);
-  const tagAt = (n: number | null) => (n == null ? undefined : marks.find((mark) => n === mark.start));
+  const tagAt = (n: number | null) => (!tags || n == null ? undefined : marks.find((mark) => n === mark.start));
 
   return (
     <div ref={scroller} className={`thin-scroll overflow-auto bg-panel font-mono text-[12.5px] leading-[1.7] ${className}`}>

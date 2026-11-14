@@ -75,6 +75,15 @@ export const KIND_MEANING: Record<PlantKind, string> = {
   historical: "A real bug this project once had, put back in.",
 };
 
+/** The reviewer may cite a file by a shorter path than the change uses. */
+export function sameFile(a: string, b: string): boolean {
+  return a === b || a.endsWith("/" + b) || b.endsWith("/" + a);
+}
+
+export function lineRange(start: number, end: number): string {
+  return end > start ? `${start}–${end}` : `${start}`;
+}
+
 export function fileName(path: string): string {
   return path.split("/").pop() ?? path;
 }

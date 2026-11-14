@@ -60,13 +60,21 @@ A working prototype with two parts.
 
 **2. A web page where the accountable person signs.**
 
-- A list of pull requests, and for each one the requirement point by point:
-  what the reviewer says, the lines it points to, and whether it noticed
-  when we broke them.
-- The code, with the places marked where the reviewer missed a planted
-  break. Those are the lines to read yourself.
-- A sign-off with the person's name. Accept unlocks only after every marked
-  spot has a verdict ("looks right" or "looks wrong").
+- A list of pull requests. Each one opens as a list of steps for the person:
+  first how the reviewer did on our test, then one step per requirement
+  point, then the sign-off.
+- Each requirement step shows what the reviewer says, whether it noticed
+  when we broke its evidence, and every line it cites, already open. One
+  click shows the same lines in the whole change.
+- Green points (the reviewer's answer held up) the person reads and
+  confirms. Yellow and red points the person decides: met or not met, plus
+  a verdict ("looks right" or "looks wrong") on every spot where the
+  reviewer missed a planted break.
+- The steps can be taken in any order. The checks are saved in the browser,
+  so a review can be paused and continued later. They are thrown away if
+  the code shown changes.
+- A sign-off with the person's name. Accept unlocks only when every step is
+  done and nothing is marked wrong. Reject and full read are always open.
 - A spot-check of the person: for a share of pull requests the code first
   shown is a copy with a planted bug. Accepting it is recorded and nothing
   is approved.
