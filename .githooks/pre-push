@@ -1,0 +1,62 @@
+#!/bin/bash
+# Second net behind pre-commit: blocks a push whose new commits contain a key.
+# It checks every commit that the remote does not have yet, and never prints the key.
+#
+# Enabled together with pre-commit:  git config core.hooksPath .githooks
+
+keys_file="${JUNCTION_KEYS_FILE:-$HOME/.junction-keys.env}"
+zero="0000000000000000000000000000000000000000"
+pattern='(^|[^A-Za-z0-9])(dc|rc)_[A-Fa-f0-9]{32,}|nvapi-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,}|hf_[A-Za-z0-9]{30,}|gh[pousr]_[A-Za-z0-9]{30,}|(^|[^A-Za-z0-9])a[ks]-[A-Za-z0-9]{20,}'
+blocked=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue    # deleting a branch pushes nothing
+  if [ "$remote_sha" = "$zero" ]; then
+    range="$local_sha --not --remotes"       # new branch: everything no remote has
+  else
+    range="$remote_sha..$local_sha"
+  fi
+
+  names=$(git log --format= --name-only --diff-filter=ACMR $range | sort -u)
+  added=$(git log -p --format= --no-color -U0 $range | grep '^+' | grep -v '^+++ ')
+
+  while IFS= read -r name; do
+    [ -z "$name" ] && continue
+    case "$(basename "$name")" in
+      *.example.env|.env.example) ;;
+      .env|.env.*|*keys*.env|*.pem|*.key)
+        echo "BLOCKED: '$name' looks like a keys file and is in a commit being pushed."
+        blocked=1 ;;
+    esac
+  done <<< "$names"
+
+  if [ -f "$keys_file" ]; then
+    while IFS= read -r line; do
+      case "$line" in ''|'#'*) continue ;; esac
+      name="${line%%=*}"
+      value="${line#*=}"
+      value="${value%\"}"; value="${value#\"}"
+      value="${value%\'}"; value="${value#\'}"
+      case "$name" in *KEY*|*TOKEN*|*SECRET*) ;; *) continue ;; esac
+      [ "${#value}" -lt 12 ] && continue
+      if printf '%s\n' "$added" | grep -F -q -- "$value"; then
+        echo "BLOCKED: the value of $name from your keys file is in a commit being pushed."
+        blocked=1
+      fi
+    done < "$keys_file"
+  fi
+
+  hits=$(printf '%s\n' "$added" | grep -E -c -- "$pattern")
+  if [ "$hits" -gt 0 ]; then
+    echo "BLOCKED: $hits line(s) in the commits being pushed contain a string shaped like an API key."
+    blocked=1
+  fi
+done
+
+if [ "$blocked" -ne 0 ]; then
+  echo
+  echo "Nothing was pushed. The key is in a commit, so deleting the file is not enough."
+  echo "Tell the team, revoke the key, and rewrite the commit before pushing."
+  exit 1
+fi
+exit 0
