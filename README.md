@@ -86,7 +86,8 @@ A working prototype with two parts.
   is approved.
 
 We run it on Tieto's four sample changes with two reviewers on identical
-planted breaks: NVIDIA Nemotron and Google Gemma. A third model writes the
+planted breaks: NVIDIA Nemotron and Google Gemini 4 Hydrogen (until Saturday
+evening the second reviewer was Google Gemma 4 31B). A third model writes the
 breaks, so no reviewer is graded on bugs in its own style.
 
 An example from the first sample change: the reviewer cited one line as its
@@ -97,23 +98,28 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
 [docs/lessons-log.md](docs/lessons-log.md) (decisions and failures),
 [docs/results.md](docs/results.md) (numbers).
 
-## Status (Saturday 14 November, morning)
+## Status (Saturday 14 November, evening)
 
 - The pipeline, the page and the tests work. The concept card and lessons
   log are up to date.
 - **Results are partial.** The pipeline changed this morning, so the sample
   changes are being rerun, and the reruns were stopped before they finished.
   In `results/` now: pull requests #1 and #2 with both reviewers, and pull
-  request #3 with Nemotron only. Missing: pull request #3 with Gemma, and
-  pull request #4, which shows as "Not tested yet" on the page.
+  request #3 with Nemotron only. In these saved runs the second reviewer is
+  still Gemma; reruns use Gemini and replace them. Missing: pull request #3
+  with the second reviewer, and pull request #4, which shows as "Not tested
+  yet" on the page.
 - To finish them (needs keys, see below), run the pipeline for
   `ju26-issue-2129` and `ju26-issue-2297`, then regenerate the summary with
   `scripts/summarise_results.py` and commit `results/` and `docs/results.md`.
   Work that does not depend on other work now runs at the same time: both
   reviews of the real change, all reviewers, the planting requests and the
-  altered requirement. Set `REVIEWER2_WORKERS=4` in your keys file (Featherless
-  accepted 4 Gemma requests at once in our test); a run of one pull request
-  should then take roughly 10 to 15 minutes instead of about 30.
+  altered requirement. When the planted copies are reused, every review of a
+  reviewer goes out in one round. Use the settings listed in
+  `keys.example.env`. Measured on pull request #1 with its 10 planted copies
+  reused: the whole run took about 2 minutes (it took about 5.5 before the
+  one-round change), Nemotron's part about 75 seconds. Planting new copies
+  adds the planter's time on top.
 - Not started: running the planted copies (Modal), the product name, the
   video, the public repository.
 
@@ -130,7 +136,7 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
 4. **Keep a track record.** Pool results per reviewer, per code area and per
    kind of defect, so the amount of human review follows measured trust.
 5. **Submission.** Product name, two-minute video, public repository, and
-   the texts for the technology challenges (Nemotron, Gemma, Modal).
+   the texts for the technology challenges (Nemotron, Gemini API, Modal).
 
 ## Run the page (no keys needed)
 
@@ -274,8 +280,8 @@ What the keys file holds (names only):
 |---|---|
 | `PLANTER_BASE_URL`, `PLANTER_MODEL`, `PLANTER_API_KEY` | The model that writes the planted breaks |
 | `REVIEWER_BASE_URL`, `REVIEWER_MODEL`, `REVIEWER_API_KEY` | Reviewer 1 (NVIDIA Nemotron) |
-| `REVIEWER2_BASE_URL`, `REVIEWER2_MODEL`, `REVIEWER2_API_KEY` | Reviewer 2 (Google Gemma), optional |
-| `REVIEWER_MAX_TOKENS`, `REVIEWER_MAX_DIFF_CHARS`, `REVIEWER_WORKERS` | Optional limits per reviewer; `_WORKERS` is how many reviews run at once |
+| `REVIEWER2_BASE_URL`, `REVIEWER2_MODEL`, `REVIEWER2_API_KEY` | Reviewer 2 (Google Gemini 4 Hydrogen), optional |
+| `REVIEWER_MAX_TOKENS`, `REVIEWER_MAX_DIFF_CHARS`, `REVIEWER_WORKERS`, `REVIEWER_TIMEOUT_SECONDS` | Optional limits per reviewer, same for `REVIEWER2_`; `_WORKERS` is how many reviews run at once. The values we use are in `keys.example.env` |
 | `PLANTER_WORKERS` | Optional: planting requests sent at once (default 3) |
 
 ## Working together
