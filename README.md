@@ -87,18 +87,27 @@ Every pull request answers three questions, each with an owner:
 Two reviewers sit the same planted copies: NVIDIA Nemotron and Google Gemma.
 A third model, DeepSeek, writes the edits.
 
-What the data already shows: the same reviewer was sharp on pull request #3
-(noticed 6 of 7 breaks, no false alarms) and jumpy on #1 (noticed 5 of 7 but
-alarmed on 2 of 3 harmless edits). Gemma noticed 0 of 7 on #1 while saying
-the change meets the requirement. A reviewer's trustworthiness changes from
-one change to the next, so it has to be tested on each change.
+What the data already shows:
+
+- The same reviewer was sharp on pull request #3 (noticed 6 of 7 breaks, no
+  false alarms) and unreliable on #1. A reviewer's trustworthiness changes
+  from one change to the next, so it has to be tested on each change.
+- On the paired rerun of #1, **no objective could be proven**, and the page
+  says why: on R1 Nemotron reacted to both breaks but took back "met" only
+  once and also alarmed on a harmless edit in the same lines; on R2 it missed
+  the break at line 239, a blind spot it showed in both runs, with different
+  planted edits; R3 and R4 rest on test code that was never run. Gemma
+  caught 1 of 6 breaks while saying the change meets the requirement.
+- So all four objectives of #1 go to the engineer: the test refuses to
+  vouch for the AI, and shows exactly where.
 
 More detail: [docs/concept-card.md](docs/concept-card.md),
 [docs/lessons-log.md](docs/lessons-log.md), [docs/results.md](docs/results.md).
 
 ## Status (Saturday 14 November, evening)
 
-- Pull request #1 is rerun with paired planting and the new scoring.
+- Pull request #1 is rerun with paired planting and the new scoring
+  (rescored once from its saved reviews after a scoring fix; the run says so).
 - **Pull requests #2 and #3 still have results from the older pipeline**
   (no harmless edits next to the breaks), so none of their objectives can be
   Proven yet. To rerun them with keys:

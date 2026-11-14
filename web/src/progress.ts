@@ -244,7 +244,9 @@ function describePoint(point: PointView, spots: Plant[]): { tone: Tone; chip: st
   if (missed) {
     const claim = point.status === "met" ? "The reviewer says this is met, but it" : "The reviewer could not tell, and it";
     const tested =
-      point.broken_total > 0
+      point.broken_total === 1
+        ? "missed the one break we planted in the lines it cites."
+        : point.broken_total > 0
         ? `missed ${point.broken_total - point.broken_noticed} of the ${point.broken_total} breaks we planted in the lines it cites.`
         : `missed ${spots.length === 1 ? "a break" : `${spots.length} breaks`} we planted against this point.`;
     return {
@@ -289,13 +291,15 @@ function describePoint(point: PointView, spots: Plant[]): { tone: Tone; chip: st
   if (point.noticed === "yes") {
     const gaps = [
       point.broken_total < 2 ? `only ${point.broken_total === 1 ? "one break was" : `${point.broken_total} breaks were`} planted here` : null,
-      (point.broken_withdrew ?? 0) < point.broken_total ? "it flagged the line but still called the point met" : null,
+      (point.broken_withdrew ?? 0) < point.broken_total
+        ? `it took back "met" on only ${point.broken_withdrew ?? 0} of ${point.broken_total === 1 ? "the 1 break" : `the ${point.broken_total} breaks`}`
+        : null,
       !point.harmless_near ? "no harmless edit was tested here" : (point.harmless_near_alarms ?? 0) > 0 ? "it also raised the alarm on a harmless edit here" : null,
     ].filter(Boolean);
     return {
       tone: "unproven",
       chip: `Noticed ${point.broken_noticed} of ${point.broken_total}, not proven`,
-      why: `The reviewer says this is met and reacted to every break we planted in the lines it cites, but ${gaps.join("; ") || "the test was too small"}.`,
+      why: `The reviewer says this is met and reacted to every break we planted in the lines it cites. Not proven, because ${gaps.join(", and ") || "the test was too small"}.`,
       todo: "Read the lines and decide yourself.",
     };
   }

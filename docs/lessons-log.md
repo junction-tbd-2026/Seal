@@ -58,6 +58,8 @@ Each entry says what we expected, what happened, and what we changed.
 | 10 | On pull request #2 the reviewer said the edits do not reach the analyzer. They do: the analyzer calls the changed code. | A reviewer that sees only the diff can accuse a correct change, and planted copies never test accusations. | The engineer judges every finding as real or not; repository context for the reviewer is the next step. |
 | 11 | Asked for every objective's edits in one request, the planter thought until its reply budget ran out and returned nothing, and the run went on to review zero copies. | Bigger requests to a thinking model fail all at once. | One small request per objective; a run with nothing planted stops. |
 | 12 | The same reviewer was sharp on pull request #3 (6 of 7 breaks, no false alarms) and close to chance on #1. | A reviewer's average says little about the next change. | This is the case for testing on every change, and it leads the pitch. |
+| 13 | On the paired rerun of #1 every objective was first marked unstable, so nothing was scored. The reviewer had said "met" both times; our citation check lowered the second answer because its citation was too broad. | The same mistake can hide in more than one rule: we had fixed it in scoring but not in the stability check. | The stability check compares the reviewer's own answers; saved runs can be rescored without calling a model. |
+| 14 | Across two runs with different planted edits, Nemotron missed the break at line 239 of pull request #1 both times. | A blind spot that repeats is the most useful thing the test can show a signer. | It stays a red spot for the engineer on every run of this change. |
 
 ## What we would not trust in our own output
 
