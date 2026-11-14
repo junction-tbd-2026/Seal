@@ -12,8 +12,9 @@ read the ranges, not the fractions.
 
 | Reviewer | Verdict on the real change | Planted defects caught | Supported claim | False alarms | Verdict moved when requirement altered | No answer |
 |---|---|---|---|---|---|---|
-| nemotron-3.5-super-vl | meets requirement | 3 of 4 | The true catch rate is between 30% and 95% (95% interval). | 1 of 3 | yes | 2 |
 | gemma-4-31B-it | meets requirement | 1 of 6 | The true catch rate is between 3% and 56% (95% interval). | 0 of 3 | yes | 1 |
+| gemini-4-hydrogen | could not tell | 6 of 6 | This supports a catch rate of at least 61% (95% confidence). | 0 of 4 | not tested | 0 |
+| nemotron-3.5-super-vl | meets requirement | 3 of 6 | The true catch rate is between 19% and 81% (95% interval). | 0 of 4 | yes | 0 |
 
 ## Pull request #2: Analyzer does not run when SuppressSourceGeneration is true
 
@@ -40,5 +41,6 @@ Not tested yet.
 
 | Reviewer | Planted defects caught | 95% interval | Bugs caught | Omissions caught | False alarms | No answer |
 |---|---|---|---|---|---|---|
-| nemotron-3.5-super-vl | 9 of 11 | 52% to 95% | 7 of 8 | 2 of 3 | 1 of 6 | 3 |
 | gemma-4-31B-it | 2 of 12 | 5% to 45% | 2 of 10 | 0 of 2 | 0 of 6 | 2 |
+| gemini-4-hydrogen | 6 of 6 | 61% to 100% | 6 of 6 | 0 of 0 | 0 of 4 | 0 |
+| nemotron-3.5-super-vl | 9 of 13 | 42% to 87% | 7 of 10 | 2 of 3 | 0 of 7 | 1 |
