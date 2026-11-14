@@ -1,0 +1,33 @@
+# Keys never enter an image, whatever is lying in the folder when it is built.
+**/.env
+**/.env.*
+**/*keys*.env
+**/*.pem
+**/*.key
+
+# Not needed by the web application.
+.git
+.github
+.githooks
+.venv
+docs
+junction2026
+scripts
+tests
+work
+
+# Built inside the image.
+**/node_modules
+web/dist
+**/*.tsbuildinfo
+
+# Local state: raw model replies, and sign-offs recorded on this machine.
+results/debug
+results/signoffs.jsonl
+results/vigilance.jsonl
+
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+.pytest_cache
+.DS_Store
