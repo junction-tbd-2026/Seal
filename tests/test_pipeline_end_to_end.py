@@ -455,17 +455,19 @@ class PairedPlantingTests(unittest.TestCase):
     def test_the_prompt_asks_for_each_point_by_its_cited_lines(self):
         model = ScriptedModel()
         ModelPlanter(model, self.repo).plant_per_point(self.change, self.points, self.targets, per_point=1, silence=1)
-        prompt = [user for system, user in model.calls if system == PLANT_SYSTEM][0]
-        self.assertIn("R1: cited lines 5-8", prompt)
-        self.assertIn("R2: cited lines 9-9", prompt)
-        self.assertIn("NOT inside any of the cited lines", prompt)
+        prompts = [user for system, user in model.calls if system == PLANT_SYSTEM]
+        self.assertEqual(len(prompts), 3)                     # one small request per point, one for the quiet lines
+        self.assertIn("R1: cited lines 5-8", prompts[0])
+        self.assertNotIn("R2: cited lines", prompts[0])
+        self.assertIn("R2: cited lines 9-9", prompts[1])
+        self.assertIn("NOT inside any of these cited lines", prompts[2])
 
     def test_a_point_marked_risky_gets_one_more_of_each(self):
         model = ScriptedModel()
         ModelPlanter(model, self.repo).plant_per_point(self.change, self.points, self.targets, per_point=1, silence=0, risky=["R1"])
-        prompt = [user for system, user in model.calls if system == PLANT_SYSTEM][0]
-        self.assertIn("R1: cited lines 5-8. Propose 3 breaks", prompt)
-        self.assertIn("R2: cited lines 9-9. Propose 2 breaks", prompt)
+        prompts = "\n".join(user for system, user in model.calls if system == PLANT_SYSTEM)
+        self.assertIn("R1: cited lines 5-8. Propose 3 breaks", prompts)
+        self.assertIn("R2: cited lines 9-9. Propose 2 breaks", prompts)
 
     def test_scoring_uses_the_reviewers_own_answer_not_our_citation_check(self):
         from reviewer_controls.controls import score

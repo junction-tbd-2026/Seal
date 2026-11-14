@@ -492,36 +492,48 @@ class ModelPlanter(Planter):
         base_text = file_at(self.repo, change.base_ref, file_diff.path)
         cited = {pid: ranges for pid, ranges in self._cited_in(file_diff.path).items() if pid in budget}
         listed = "".join("\n{}: {}".format(point.id, point.text) for point in self._points)
+        everything_cited = [r for ranges in self._cited_in(file_diff.path).values() for r in ranges]
+
+        # One small request per point, and one for the quiet lines. Asked for everything at once,
+        # a model that thinks before answering can spend its whole reply budget deliberating.
         asks = []
         for pid, n in budget.items():
             ranges = ", ".join("{}-{}".format(a, b) for a, b in cited.get(pid, []))
-            asks.append(
-                "\n- {}: cited lines {}. Propose {} breaks (kind \"bug\" or \"omission\", \"breaks\": \"{}\") and {} "
-                "harmless edits (\"near\": \"{}\"), every one changing code inside those lines.".format(
+            asks.append((
+                "{}: cited lines {}. Propose {} breaks (kind \"bug\" or \"omission\", \"breaks\": \"{}\") and {} "
+                "harmless edits (\"near\": \"{}\"), every one changing code inside those lines. Nothing else.".format(
                     pid, ranges, n + SPARE_PROPOSALS, pid, n + SPARE_PROPOSALS, pid
-                )
-            )
+                ),
+                file_diff.added_ranges + cited.get(pid, []),
+            ))
         if quiet:
-            asks.append(
-                "\n- Also propose {} edits of kind \"bug\" in changed lines (marked \"+\") that are NOT inside any of "
-                "the cited lines above, with \"breaks\": null.".format(quiet + SPARE_PROPOSALS)
+            asks.append((
+                "Propose {} edits of kind \"bug\" in changed lines (marked \"+\") that are NOT inside any of these cited "
+                "lines: {}. Use \"breaks\": null. Nothing else.".format(
+                    quiet + SPARE_PROPOSALS, ", ".join("{}-{}".format(a, b) for a, b in everything_cited) or "none"
+                ),
+                file_diff.added_ranges,
+            ))
+        proposals: List[Any] = []
+        for ask, shown_ranges in asks:
+            user = "Requirement:\n{}\n\nRequirement points:{}\n\nFile: {}\n\n{}\n\n{}".format(
+                change.requirement_text.strip(), listed, file_diff.path, numbered_excerpt(head_text, shown_ranges), ask
             )
-        shown_ranges = file_diff.added_ranges + [r for ranges in cited.values() for r in ranges]
-        user = "Requirement:\n{}\n\nRequirement points:{}\n\nFile: {}\n\n{}\n\nFor this file:{}".format(
-            change.requirement_text.strip(), listed, file_diff.path, numbered_excerpt(head_text, shown_ranges), "".join(asks)
-        )
-        try:
-            reply = extract_json(
-                self.client.complete(PLANT_SYSTEM, user, temperature=0.7, max_tokens=self.max_tokens).text,
-                accept=lambda value: (isinstance(value, dict) and isinstance(value.get("edits"), list))
-                or (isinstance(value, list) and bool(value) and all(isinstance(item, dict) for item in value)),
-            )
-        except ModelError as error:
-            self.problems.append("The planter failed on {}: {}".format(file_diff.path, error))
-            return []
-        proposals = reply.get("edits") if isinstance(reply, dict) else reply
-        if not isinstance(proposals, list):
-            self.problems.append("The planter's reply for {} was not a list of edits.".format(file_diff.path))
+            try:
+                reply = extract_json(
+                    self.client.complete(PLANT_SYSTEM, user, temperature=0.7, max_tokens=self.max_tokens).text,
+                    accept=lambda value: (isinstance(value, dict) and isinstance(value.get("edits"), list))
+                    or (isinstance(value, list) and bool(value) and all(isinstance(item, dict) for item in value)),
+                )
+            except ModelError as error:
+                self.problems.append("The planter failed on part of {}: {}".format(file_diff.path, error))
+                continue
+            edits = reply.get("edits") if isinstance(reply, dict) else reply
+            if isinstance(edits, list):
+                proposals.extend(edits)
+            else:
+                self.problems.append("The planter's reply for part of {} was not a list of edits.".format(file_diff.path))
+        if not proposals:
             return []
 
         # Sort every usable edit into a slot: (point, defect), (point, harmless) or the quiet slot.

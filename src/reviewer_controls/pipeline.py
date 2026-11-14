@@ -256,6 +256,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             plants = planter.plant(change, args.plants, args.kinds, points, targets)
         for problem in planter.problems:
             print("  note: {}".format(problem))
+        if not plants:
+            print("error: no usable planted variants, so there is nothing to test the reviewers on. Nothing was saved.", file=sys.stderr)
+            return 1
 
     # One altered requirement for every reviewer, written before they run side by side.
     if altered is None:
