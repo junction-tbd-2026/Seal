@@ -24,7 +24,8 @@ def run(reviewer, created_at, plants, caught_ids):
         hit = p["id"] in caught_ids
         reviews.append({"reviewer": reviewer, "variant_id": p["id"], "error": "", "findings": []})
         outcomes.append({"plant_id": p["id"], "kind": p["kind"], "reviewer": reviewer, "flagged": hit,
-                         "correct": hit == (p["kind"] != "harmless"), "inconclusive": False})
+                         "correct": hit == (p["kind"] != "harmless"), "inconclusive": False,
+                         "point_link": "confirmed" if p.get("breaks") else None})
     return {
         "change": {"id": "c1", "requirement_id": "1", "base_ref": "b", "head_ref": "h", "diff": REAL,
                    "requirement_text": "# Requirement #1: Clamp\n\nBody.\n"},
@@ -112,6 +113,27 @@ class VigilanceTests(unittest.TestCase):
         self.assertEqual(self.shown(on.open("c1")), ["if (value > max)"])
         on.reset()
         self.assertEqual(self.shown(on.open("c1")), ["if (value < max)"])
+
+    def test_only_a_share_of_pull_requests_is_spot_checked_and_the_choice_sticks(self):
+        draws = iter([0.9, 0.1])
+        vigilance = Vigilance(self.results, rate=0.5, rng=lambda: next(draws))
+        self.assertEqual(self.shown(vigilance.open("c1")), ["if (value > max)"])   # 0.9: not picked
+        self.assertEqual(self.shown(vigilance.open("c1")), ["if (value > max)"])   # and it stays that way
+        vigilance.reset()
+        self.assertEqual(self.shown(vigilance.open("c1")), ["if (value < max)"])   # 0.1: picked
+        self.assertEqual(vigilance.record()["rate"], 0.5)
+
+    def test_points_only_count_breaks_inside_the_lines_the_reviewer_cited(self):
+        data = run("big", "2026-11-14T04:00:00Z", self.plants, set())
+        data["outcomes"][0]["point_link"] = "unconfirmed"
+        data["unstable_points"] = []
+        (self.results / "big.json").write_text(json.dumps(data))
+        big = lambda: [r for r in build_exam(self.results, "c1")["reviewers"] if r["name"] == "big"][0]["points"][0]
+        point = big()
+        self.assertEqual((point["broken_total"], point["aimed_elsewhere"], point["noticed"]), (1, 1, "no"))
+        data["unstable_points"] = ["R1"]
+        (self.results / "big.json").write_text(json.dumps(data))
+        self.assertEqual(big()["noticed"], "unstable")
 
     def test_without_a_saved_planted_copy_the_real_change_is_shown(self):
         (self.results / "c1__plants__x.json").unlink()

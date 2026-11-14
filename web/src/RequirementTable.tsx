@@ -12,18 +12,38 @@ function noticedCell(point: PointView): { label: string; detail: string; style: 
     return { label: "A person decides", detail: "The reviewer did not call this met.", style: "bg-warn-wash" };
   }
   switch (point.noticed) {
+    case "unstable":
+      return {
+        label: "Not scored",
+        detail: "The reviewer gave a different answer on two identical reviews, so its answer here means little.",
+        style: "bg-warn-wash",
+      };
     case "yes":
-      return { label: "Yes", detail: `Noticed ${point.broken_noticed} of ${point.broken_total} breaks`, style: "bg-caught-wash" };
+      return {
+        label: "Yes",
+        detail: `We broke the lines it cited ${point.broken_total} ${point.broken_total === 1 ? "time" : "times"}. It noticed every time.`,
+        style: "bg-caught-wash",
+      };
     case "no":
-      return { label: "No", detail: `Noticed 0 of ${point.broken_total} breaks. Check it yourself.`, style: "bg-missed-wash" };
+      return {
+        label: "No",
+        detail: `We broke the lines it cited ${point.broken_total} ${point.broken_total === 1 ? "time" : "times"}. It never noticed. Check it yourself.`,
+        style: "bg-missed-wash",
+      };
     case "partly":
       return {
         label: "Partly",
-        detail: `Noticed ${point.broken_noticed} of ${point.broken_total} breaks. Check it yourself.`,
+        detail: `We broke the lines it cited ${point.broken_total} times. It noticed ${point.broken_noticed}. Check it yourself.`,
         style: "bg-missed-wash",
       };
     default:
-      return { label: "Not tested", detail: "We planted nothing against this point.", style: "bg-canvas" };
+      return {
+        label: "Not tested",
+        detail: point.aimed_elsewhere
+          ? "Our breaks for this point fell outside the lines it cited, so they are not counted here."
+          : "We planted nothing against this point.",
+        style: "bg-canvas",
+      };
   }
 }
 
@@ -93,7 +113,9 @@ export function RequirementTable({
                       ))}
                     </span>
                   ) : (
-                    <span className="text-[12px] text-faint">Nothing cited</span>
+                    <span className="text-[12px] text-faint">
+                      {point.dropped_evidence ? "It cited lines that are not in this change" : "Nothing cited"}
+                    </span>
                   )}
                 </td>
                 <td className={`px-2 py-2 ${noticed.style}`}>

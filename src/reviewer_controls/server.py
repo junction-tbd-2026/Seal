@@ -23,7 +23,12 @@ PULLS_FILE = Path(os.environ.get("PULLS_FILE") or ROOT / "pull_requests.json")
 WEB_DIST = ROOT / "web" / "dist"
 
 app = FastAPI(title="Reviewer Controls", docs_url="/api/docs", openapi_url="/api/openapi.json")
-vigilance = Vigilance(RESULTS_DIR, enabled=os.environ.get("SPOT_CHECKS", "on") != "off")
+# SPOT_CHECK_RATE is the share of pull requests whose first sign-off is a spot-check. Set it to 1 for a demo.
+vigilance = Vigilance(
+    RESULTS_DIR,
+    enabled=os.environ.get("SPOT_CHECKS", "on") != "off",
+    rate=float(os.environ.get("SPOT_CHECK_RATE", "0.5")),
+)
 
 
 class SignOff(BaseModel):

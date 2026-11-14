@@ -44,8 +44,9 @@ class PointAssessment:
 
     id: str
     status: str = "cannot_tell"      # met | not_met | cannot_tell
-    evidence: List[dict] = field(default_factory=list)   # [{"file", "line_start", "line_end"}]
+    evidence: List[dict] = field(default_factory=list)   # [{"file", "line_start", "line_end", "in_change"}]
     reason: str = ""
+    dropped_evidence: int = 0        # citations thrown out because the lines are not in the change
 
 
 @dataclass
@@ -108,6 +109,7 @@ class ControlOutcome:
     inconclusive: bool = False       # the reviewer already flagged this spot in the real change
     point_id: Optional[str] = None   # the requirement point the planted edit breaks
     point_noticed: Optional[bool] = None   # did the reviewer stop calling that point met
+    point_link: Optional[str] = None  # "confirmed" when the edit sits in lines the reviewer cited for that point
 
 
 @dataclass
@@ -123,6 +125,8 @@ class RunReport:
     original_review: Optional[ReviewResult] = None
     variant_reviews: List[ReviewResult] = field(default_factory=list)
     outcomes: List[ControlOutcome] = field(default_factory=list)
+    repeat_review: Optional[ReviewResult] = None      # the real change reviewed a second time, unchanged
+    unstable_points: List[str] = field(default_factory=list)   # points whose answer differed between the two
     altered_requirement: str = ""
     altered_requirement_review: Optional[ReviewResult] = None
     requirement_flip_changed_verdict: Optional[bool] = None

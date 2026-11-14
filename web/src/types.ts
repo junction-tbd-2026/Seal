@@ -22,7 +22,7 @@ export type Finding = { file: string; line_start: number; line_end: number; mess
 
 export type PointStatus = "met" | "not_met" | "cannot_tell";
 
-export type EvidenceRef = { file: string; line_start: number; line_end: number };
+export type EvidenceRef = { file: string; line_start: number; line_end: number; in_change?: boolean };
 
 /** One requirement point as one reviewer sees it, and whether it noticed when we broke that point. */
 export type PointView = {
@@ -33,7 +33,12 @@ export type PointView = {
   reason: string;
   broken_total: number;
   broken_noticed: number;
-  noticed: "yes" | "no" | "partly" | "untested";
+  /** "unstable": the reviewer answered differently on two identical reviews, so the point is not scored. */
+  noticed: "yes" | "no" | "partly" | "untested" | "unstable";
+  /** Planted edits aimed at this point that fell outside the lines the reviewer cited. Not counted here. */
+  aimed_elsewhere?: number;
+  /** Citations thrown out because the lines are not in the change. */
+  dropped_evidence?: number;
   missed_plants: string[];
 };
 
@@ -113,7 +118,7 @@ export type Pull = {
   signed: SignOff | null;
 };
 
-export type SpotRecord = { enabled: boolean; checked: number; caught: number };
+export type SpotRecord = { enabled: boolean; rate?: number; checked: number; caught: number };
 
 export type PullList = {
   repository: string;

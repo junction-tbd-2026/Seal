@@ -153,3 +153,31 @@ def replace_file_in_diff(diff: str, path: str, new_file_diff: str) -> str:
 def overlaps_added(ranges: List[Tuple[int, int]], start: int, end: int, slack: int = 0) -> bool:
     """True when lines start..end touch any added range, within `slack` lines."""
     return any(start <= r_end + slack and end >= r_start - slack for r_start, r_end in ranges)
+
+
+def line_sets(diff: str) -> dict:
+    """For each file in a diff: the new-file line numbers it shows, and the ones it adds."""
+    result = {}
+    for file_diff in split_diff(diff):
+        shown, added = set(), set()
+        new_line = 0
+        in_hunk = False
+        for line in file_diff.text.splitlines():
+            header = _HUNK_HEADER.match(line)
+            if header:
+                new_line = int(header.group(3))
+                in_hunk = True
+                continue
+            if not in_hunk or line.startswith("\\") or line.startswith("-"):
+                continue
+            shown.add(new_line)
+            if line.startswith("+"):
+                added.add(new_line)
+            new_line += 1
+        result[file_diff.path] = {"shown": shown, "added": added}
+    return result
+
+
+def same_file(a: str, b: str) -> bool:
+    a, b = a.replace("\\", "/").lstrip("./"), b.replace("\\", "/").lstrip("./")
+    return a == b or a.endswith("/" + b) or b.endswith("/" + a)

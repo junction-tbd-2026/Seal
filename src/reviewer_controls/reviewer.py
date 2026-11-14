@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
-from .diffs import render_numbered, split_diff
+from .diffs import line_sets, render_numbered, same_file, split_diff
 from .llm import ChatClient, ModelError, as_int, extract_json
 from .models import Change, Finding, PointAssessment, RequirementPoint, ReviewResult
 
@@ -129,6 +129,29 @@ def parse_points(raw: Any, points: List[RequirementPoint]) -> List[PointAssessme
     return assessments
 
 
+def check_evidence(points: List[PointAssessment], diff: str) -> List[PointAssessment]:
+    """Keep only citations that point at lines this change actually shows.
+
+    A reviewer can cite lines that do not exist or have nothing to do with the change. Such a
+    citation is dropped, and a point left with no citation is no longer counted as met.
+    """
+    files = line_sets(diff)
+    for point in points:
+        kept = []
+        for ref in point.evidence:
+            path = next((p for p in files if same_file(p, ref["file"])), None)
+            lines = set(range(ref["line_start"], ref["line_end"] + 1))
+            if path is None or not (lines & files[path]["shown"]):
+                continue
+            kept.append(dict(ref, file=path, in_change=bool(lines & files[path]["added"])))
+        point.dropped_evidence = len(point.evidence) - len(kept)
+        point.evidence = kept
+        if point.status == "met" and not kept:
+            point.status = "cannot_tell"
+            point.reason = (point.reason + " The lines it cited are not part of this change.").strip()
+    return points
+
+
 class ModelReviewer(Reviewer):
     """A reviewer reachable through an OpenAI-compatible chat endpoint."""
 
@@ -182,7 +205,7 @@ class ModelReviewer(Reviewer):
         verdict = reply.get("meets_requirement")
         result.meets_requirement = verdict if isinstance(verdict, bool) else None
         result.findings = parse_findings(reply.get("findings"))
-        result.points = parse_points(reply.get("points"), points or [])
+        result.points = check_evidence(parse_points(reply.get("points"), points or []), diff)
         refused = reply.get("refused_to_decide")
         if isinstance(refused, list):
             result.refused_to_decide = [str(item).strip() for item in refused if str(item).strip()]

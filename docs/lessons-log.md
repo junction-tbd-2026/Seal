@@ -21,6 +21,14 @@ Each entry says what we expected, what happened, and what we changed.
 | 12 | A planted defect also counts as caught when the reviewer stops calling the broken point "met". | A reviewer can notice that required behaviour is gone without pointing at the exact line. |
 | 13 | The person signing is spot-checked with a planted copy, at a spot the page already marks for them. | AI review makes rubber-stamping easy. An approval that is never tested carries no information. |
 | 14 | A spot-check stays in place across page reloads until it is signed, and never records an approval. | Our first version was used up by a page reload before anyone saw it. |
+| 15 | The checklist is written from the requirement alone. | Written with the code in view, the points described what the code did and were bound to come out "met". |
+| 16 | A citation must point at lines in the change, or it is thrown out. | Requiring a citation is worthless if any line number will do. |
+| 17 | A planted break is credited to a point only when it sits inside the lines the reviewer cited for it. | "This edit breaks R1" was only the planter's word. "We broke the lines you pointed at and you still said met" needs nobody's word. |
+| 18 | The unchanged change is reviewed twice; a point that gets two different answers is not scored. | Otherwise a change of answer caused by chance is counted as a catch. |
+| 19 | A harmless edit also counts as a false alarm when the reviewer withdraws a "met". | The reviewer can cry wolf without pointing at a line. |
+| 20 | Only a share of pull requests is spot-checked, and the page says so. | A check on every first opening is predictable after one surprise. |
+| 21 | Accept is locked until every marked spot has been opened. | In our own trial a person accepted a planted copy within seconds, without looking at anything. |
+| 22 | One reviewer is shown by default; the comparison is one click away. | A signer does not need two machines disagreeing. Comparing reviewers is a question for whoever chooses the reviewer. |
 
 ## Failures we saw
 

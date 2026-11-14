@@ -13,11 +13,12 @@ This is meant to run as an announced policy. The page says sign-offs are spot-ch
 from __future__ import annotations
 
 import json
+import random
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from .exam import build_exam, record_signoff, structured_diff
 
@@ -54,9 +55,18 @@ def pick_spot_check(exam: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 class Vigilance:
     """Hands out review sessions and records how the human did on spot-checks."""
 
-    def __init__(self, results_dir: Path, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        results_dir: Path,
+        enabled: bool = True,
+        rate: float = 1.0,
+        rng: Callable[[], float] = random.random,
+    ) -> None:
         self.results_dir = results_dir
         self.enabled = enabled
+        self.rate = max(0.0, min(1.0, rate))   # share of pull requests whose first sign-off is a spot-check
+        self._rng = rng
+        self._chosen: Dict[str, bool] = {}     # whether each change was picked; fixed once decided
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self._checked: Set[str] = set()    # changes whose spot-check has been signed since the server started
 
@@ -68,7 +78,7 @@ class Vigilance:
         token = uuid.uuid4().hex
         session: Dict[str, Any] = {"change_id": change_id, "plant": None, "started": time.time()}
 
-        if self.enabled and change_id not in self._checked:
+        if self.enabled and change_id not in self._checked and self._picked(change_id):
             plant = pick_spot_check(exam)
             copy = planted_copy(self.results_dir, change_id, plant) if plant else None
             if plant and copy:
@@ -80,6 +90,12 @@ class Vigilance:
         self._sessions[token] = session
         exam["session"] = token
         return exam
+
+    def _picked(self, change_id: str) -> bool:
+        """Decide once per change, so a reload cannot reveal a spot-check by making it vanish."""
+        if change_id not in self._chosen:
+            self._chosen[change_id] = self._rng() < self.rate
+        return self._chosen[change_id]
 
     def sign(self, token: str, reviewer: str, name: str, decision: str) -> Dict[str, Any]:
         session = self._sessions.pop(token, None)
@@ -131,6 +147,7 @@ class Vigilance:
                     entries.append(entry)
         return {
             "enabled": self.enabled,
+            "rate": self.rate,
             "checked": len(entries),
             "caught": sum(1 for entry in entries if entry["caught"]),
             "latest": entries[-3:],
@@ -139,4 +156,5 @@ class Vigilance:
     def reset(self) -> None:
         """Forget which changes were spot-checked, so the next opening may be a planted copy again."""
         self._checked.clear()
+        self._chosen.clear()
         self._sessions.clear()

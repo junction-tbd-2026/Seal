@@ -15,7 +15,11 @@ const STATUS: Record<PullStatus, { label: (pull: Pull) => string; chip: string }
     chip: "bg-missed text-white",
   },
   clear: { label: () => "Ready to sign", chip: "bg-caught text-white" },
-  signed: { label: (pull) => `Signed by ${pull.signed?.name ?? "someone"}`, chip: "bg-ink text-white" },
+  signed: {
+    label: (pull) =>
+      `${{ accept: "Accepted", reject: "Rejected", full_read: "Sent for full read" }[pull.signed?.decision ?? ""] ?? "Signed"} by ${pull.signed?.name ?? "someone"}`,
+    chip: "bg-ink text-white",
+  },
   untested: { label: () => "Not tested yet", chip: "bg-panel text-soft" },
 };
 
@@ -86,6 +90,8 @@ export default function App() {
   const [focus, setFocus] = useState<{ line: number; token: number } | null>(null);
   const [cited, setCited] = useState<{ pointId: string; evidence: EvidenceRef } | null>(null);
   const [showRequirement, setShowRequirement] = useState(false);
+  const [visited, setVisited] = useState<Set<string>>(new Set());
+  const [showPoints, setShowPoints] = useState(true);
   const [reveal, setReveal] = useState<{ result: Extract<SignResult, { spot_check: true }>; name: string } | null>(null);
 
   const loadPulls = useCallback(
@@ -127,6 +133,7 @@ export default function App() {
     setExam(null);
     setFocus(null);
     setCited(null);
+    setVisited(new Set());
     setShowRequirement(false);
     if (pull.status !== "untested") void loadReview(pull.change_id, false);
     // Reload only when a different pull request is opened.
@@ -152,6 +159,7 @@ export default function App() {
   }, [exam, reviewer, file, cited]);
 
   const jumpToPlant = (plant: Plant) => {
+    setVisited((current) => new Set(current).add(plant.id));
     setCited(null);
     setFilePath(plant.file);
     setFocus({ line: plant.line_start, token: Date.now() });
@@ -232,7 +240,9 @@ export default function App() {
         <div className="flex items-center gap-3 text-[12px]">
           {spot.enabled && (
             <span className="rounded-md border-2 border-white/40 px-2.5 py-1" title="Now and then the code shown for sign-off is a copy with a planted mistake. Accepting it is recorded.">
-              Sign-offs are spot-checked
+              {spot.rate != null && spot.rate < 1
+                ? `About ${Math.round(spot.rate * 100)}% of first sign-offs are spot-checks`
+                : "Sign-offs are spot-checked"}
               {spot.checked > 0 && (
                 <strong className="ml-1.5 text-warn">
                   · people caught {spot.caught} of {spot.checked}
@@ -314,7 +324,16 @@ export default function App() {
                 )}
               </div>
 
-              <RequirementTable reviewer={reviewer} selected={cited?.pointId ?? null} onEvidence={jumpToEvidence} />
+              <button
+                type="button"
+                onClick={() => setShowPoints(!showPoints)}
+                aria-expanded={showPoints}
+                className="flex items-center justify-between border-b-2 border-ink bg-canvas px-5 py-1 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-soft hover:text-ink"
+              >
+                <span>The requirement, point by point ({reviewer.points.length})</span>
+                <span>{showPoints ? "Hide" : "Show"}</span>
+              </button>
+              {showPoints && <RequirementTable reviewer={reviewer} selected={cited?.pointId ?? null} onEvidence={jumpToEvidence} />}
 
               <div className="thin-scroll flex gap-1.5 overflow-x-auto border-b-2 border-ink bg-canvas px-3 py-2" role="tablist" aria-label="Files in this change">
                 {exam.change.files.map((item) => {
@@ -355,14 +374,16 @@ export default function App() {
             </section>
 
             <Evidence
-              key={`${exam.change.id}-${reviewer.name}`}
+              key={exam.change.id}
               exam={exam}
               reviewer={reviewer}
               onReviewer={(name) => {
                 setReviewerName(name);
+                setVisited(new Set());
                 setCited(null);
               }}
               signoffs={signoffs}
+              visited={visited}
               onSign={sign}
               onJump={jumpToPlant}
             />

@@ -17,8 +17,9 @@ const MARK_TAG: Record<Mark["tone"], { text: string; style: string }> = {
 };
 
 const ROW_STYLE: Record<string, string> = {
-  add: "bg-caught-wash/60",
-  del: "bg-missed-wash/40 text-faint line-through decoration-faint/40",
+  // Plain greys for added and removed lines: red, blue, yellow and green are kept for meaning.
+  add: "bg-[#eef0f4]",
+  del: "text-faint line-through decoration-faint/50",
   ctx: "",
 };
 

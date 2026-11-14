@@ -44,6 +44,7 @@ export function Evidence({
   reviewer,
   onReviewer,
   signoffs,
+  visited,
   onSign,
   onJump,
 }: {
@@ -51,6 +52,8 @@ export function Evidence({
   reviewer: Reviewer;
   onReviewer: (name: string) => void;
   signoffs: SignOff[];
+  /** Planted-edit ids of the red spots the reader has opened. */
+  visited: Set<string>;
   onSign: (name: string, decision: string) => Promise<void>;
   onJump: (plant: Plant) => void;
 }) {
@@ -60,6 +63,7 @@ export function Evidence({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [compare, setCompare] = useState(false);
 
   // Replay: reveal the squares one at a time.
   useEffect(() => {
@@ -73,6 +77,7 @@ export function Evidence({
   const pickedPlant = picked ? plants.get(picked) ?? null : null;
   const mine = signoffs.filter((entry) => entry.reviewer === reviewer.name);
   const done = revealed >= exam.plants.length;
+  const unopened = toRead.filter((plant) => !visited.has(plant.id)).length;
 
   const verdict = reviewer.review_failed
     ? { text: "No usable answer", tone: "bg-warn" }
@@ -98,6 +103,19 @@ export function Evidence({
   return (
     <aside className="flex h-full min-h-0 flex-col border-l-2 border-ink bg-panel">
       <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
+        {!compare || exam.reviewers.length < 2 ? (
+          <div className="flex items-center justify-between gap-3 border-b-2 border-ink bg-ink px-4 py-2 text-white">
+            <p className="text-[13px] font-bold leading-tight">
+              <span className="block text-[10.5px] font-bold uppercase tracking-[0.12em] text-white/60">AI reviewer</span>
+              {prettyModel(reviewer.name)}
+            </p>
+            {exam.reviewers.length > 1 && (
+              <button type="button" onClick={() => setCompare(true)} className="rounded border-2 border-white/50 px-2 py-0.5 text-[11.5px] font-bold hover:border-white">
+                Compare reviewers
+              </button>
+            )}
+          </div>
+        ) : (
         <div className="flex border-b-2 border-ink" role="tablist" aria-label="Reviewer">
           {exam.reviewers.map((item) => (
             <button
@@ -116,11 +134,12 @@ export function Evidence({
             >
               {prettyModel(item.name)}
               <span className={`block text-[11px] font-medium ${item.name === reviewer.name ? "text-white/70" : "text-faint"}`}>
-                caught {item.counts.defects_caught} of {item.counts.defects_total}
+                noticed {item.counts.defects_caught} of {item.counts.defects_total}
               </span>
             </button>
           ))}
         </div>
+        )}
 
         <Block title="1 · What the AI reviewer found in the real code" tone={verdict.tone}>
           <p className="text-[19px] font-bold leading-tight">{verdict.text}</p>
@@ -158,7 +177,7 @@ export function Evidence({
               Replay
             </button>
           </div>
-          <p className="mt-1 text-[13px] font-medium">of our planted mistakes caught</p>
+          <p className="mt-1 text-[13px] font-medium">times it noticed when we broke the code</p>
 
           <div className="mt-3 flex flex-wrap gap-1.5" role="list" aria-label="Planted edits">
             {exam.plants.map((plant, index) => {
@@ -264,6 +283,9 @@ export function Evidence({
                       {fileName(plant.file)}:{plant.line_start}
                       {plant.line_end > plant.line_start ? `–${plant.line_end}` : ""}
                     </span>
+                    {visited.has(plant.id) && (
+                      <span className="float-right rounded-sm border-2 border-ink bg-panel px-1 text-[10.5px] font-bold uppercase">Opened</span>
+                    )}
                     <span className="mt-0.5 block text-[12.5px] leading-snug text-soft">
                       {plant.kind === "omission" ? "It did not notice when we removed needed code here." : "It did not notice a wrong line we put here."}
                     </span>
@@ -321,6 +343,7 @@ export function Evidence({
         <label htmlFor="signer" className="text-[11px] font-bold uppercase tracking-[0.12em] text-soft">
           I own this decision
         </label>
+        <p className="text-[11.5px] leading-snug text-soft">The code shown may be a spot-check copy with a planted mistake.</p>
         <input
           id="signer"
           value={name}
@@ -334,7 +357,8 @@ export function Evidence({
             <button
               key={decision.value}
               type="button"
-              disabled={busy || !name.trim()}
+              disabled={busy || !name.trim() || (decision.value === "accept" && unopened > 0)}
+              title={decision.value === "accept" && unopened > 0 ? "Open every red spot before accepting" : undefined}
               onClick={() => sign(decision.value)}
               className={`press rounded-md px-2 py-1.5 text-[13px] font-bold ${decision.style}`}
             >
@@ -342,6 +366,12 @@ export function Evidence({
             </button>
           ))}
         </div>
+        {unopened > 0 && (
+          <p className="mt-2 text-[12px] font-medium leading-snug">
+            Accept unlocks once you have opened {unopened === 1 ? "the remaining red spot" : `the ${unopened} remaining red spots`}. You can
+            reject or ask for a full read at any time.
+          </p>
+        )}
         {error && (
           <p role="alert" className="mt-2 text-[12.5px] font-medium text-missed">
             {error}

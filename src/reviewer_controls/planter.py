@@ -6,6 +6,7 @@ reviewer is not graded on bugs written in its own style.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -51,10 +52,10 @@ Reply with JSON only, in this shape:
 "replacement": "new text for those lines, or an empty string to delete them"}]}"""
 
 POINTS_SYSTEM = """You turn a software requirement into a short checklist a code reviewer can verify.
-You are given a requirement and the code change written to meet it.
-Write three to six points. Each point is one behaviour the change must deliver, stated so that a reviewer
-can say met, not met or cannot tell by reading the change. Cover what the requirement asks for, not how
-this change happens to do it. Do not include points about style, tests or documentation.
+You are given the requirement only. You have not seen any code written for it, and you must not guess at one.
+Write three to six points. Each point is one behaviour that must hold once the requirement is met, stated so
+that a reviewer can say met, not met or cannot tell by reading a change. Say what must be true, not how to
+build it. Do not include points about style, tests or documentation.
 
 Reply with JSON only, in this shape:
 {"points": [{"id": "R1", "text": "one sentence"}]}"""
@@ -157,6 +158,15 @@ def locate(lines: List[str], start: int, end: int, original: str) -> Optional[Tu
     return None
 
 
+def code_only(block: List[str]) -> str:
+    """A block with comments and all spacing removed, for comparing what the code does."""
+    return "".join(re.sub(r"\s+", "", re.sub(r"//.*$", "", line)) for line in block)
+
+
+def changes_code(old_block: List[str], new_block: List[str]) -> bool:
+    return code_only(old_block) != code_only(new_block)
+
+
 def apply_edit(
     path: str,
     head_text: str,
@@ -178,6 +188,9 @@ def apply_edit(
         return None
     new_block = replacement.strip("\n").split("\n") if replacement.strip() else []
     if [l.strip() for l in new_block] == [l.strip() for l in lines[start - 1:end]]:
+        return None
+    # A bug or omission has to change code. An edit that only touches comments or spacing changes nothing.
+    if proposal.get("kind") != KIND_HARMLESS and not changes_code(lines[start - 1:end], new_block):
         return None
     new_lines = lines[:start - 1] + new_block + lines[end:]
     last = start + max(len(new_block), 1) - 1
@@ -202,7 +215,8 @@ class ModelPlanter(Planter):
         self.problems: List[str] = []   # why fewer variants came back than were asked for
 
     def split_requirement(self, change: Change) -> List[RequirementPoint]:
-        user = "Requirement:\n{}\n\nCode change (diff):\n{}".format(change.requirement_text.strip(), change.diff[:40000])
+        # The checklist is written without sight of the change, so it cannot be shaped to fit it.
+        user = "Requirement:\n{}".format(change.requirement_text.strip())
         reply = extract_json(
             self.client.complete(POINTS_SYSTEM, user, temperature=0.0, max_tokens=self.max_tokens).text,
             accept=lambda value: isinstance(value, dict) and isinstance(value.get("points"), list),

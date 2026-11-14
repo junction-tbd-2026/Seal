@@ -128,8 +128,12 @@ def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
     points = []
     for point in run.get("requirement_points", []):
         claim = assessed.get(point["id"], {})
-        broken = [p for p in plants if p.get("breaks") == point["id"] and results[p["id"]] in ("caught", "missed")]
+        aimed = [p for p in plants if p.get("breaks") == point["id"] and results[p["id"]] in ("caught", "missed")]
+        # Only edits placed inside the lines the reviewer itself cited for this point are counted here:
+        # for those there is no arguing about whether the edit really touched the point.
+        broken = [p for p in aimed if outcomes.get(p["id"], {}).get("point_link") == "confirmed"]
         noticed = sum(1 for p in broken if results[p["id"]] == "caught")
+        unstable = point["id"] in run.get("unstable_points", [])
         points.append(
             {
                 "id": point["id"],
@@ -139,7 +143,13 @@ def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
                 "reason": claim.get("reason", ""),
                 "broken_total": len(broken),
                 "broken_noticed": noticed,
-                "noticed": "untested" if not broken else "yes" if noticed == len(broken) else "no" if noticed == 0 else "partly",
+                "aimed_elsewhere": len(aimed) - len(broken),
+                "dropped_evidence": claim.get("dropped_evidence", 0),
+                "noticed": "unstable" if unstable
+                else "untested" if not broken
+                else "yes" if noticed == len(broken)
+                else "no" if noticed == 0
+                else "partly",
                 "missed_plants": [p["id"] for p in broken if results[p["id"]] == "missed"],
             }
         )

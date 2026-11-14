@@ -17,9 +17,11 @@ from reviewer_controls.diffs import render_numbered, split_diff
 from reviewer_controls.llm import ChatResponse, ModelError, extract_json
 from reviewer_controls.models import KIND_BUG, KIND_HARMLESS
 from reviewer_controls.pipeline import load_plants, save_plants
-from reviewer_controls.planter import ALTER_SYSTEM, PLANT_SYSTEM, POINTS_SYSTEM, ModelPlanter, allocate, candidate_files, locate
+from reviewer_controls.planter import (
+    ALTER_SYSTEM, PLANT_SYSTEM, POINTS_SYSTEM, ModelPlanter, allocate, apply_edit, candidate_files, changes_code, locate,
+)
 from reviewer_controls.models import RequirementPoint
-from reviewer_controls.reviewer import REVIEW_SYSTEM, ModelReviewer, fit_diff, parse_points
+from reviewer_controls.reviewer import REVIEW_SYSTEM, ModelReviewer, check_evidence, fit_diff, parse_points
 
 BASE = """public class Calc
 {
@@ -229,6 +231,80 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual((by_plant["p02"].point_id, by_plant["p02"].point_noticed), ("R1", False))
         self.assertEqual((by_plant["p03"].point_id, by_plant["p03"].point_noticed), (None, None))
 
+    def test_checklist_is_written_without_sight_of_the_code(self):
+        _, model = self.run_all()
+        prompt = [user for system, user in model.calls if system == POINTS_SYSTEM][0]
+        self.assertIn("Clamp must never return more than max.", prompt)
+        self.assertNotIn("value > max", prompt)
+        self.assertNotIn("diff --git", prompt)
+
+    def test_planted_edits_inside_the_cited_lines_are_confirmed(self):
+        report, _ = self.run_all()
+        links = {o.plant_id: o.point_link for o in report.outcomes}
+        self.assertEqual(links, {"p01": "confirmed", "p02": "confirmed", "p03": None})
+
+    def test_a_citation_outside_the_change_is_dropped_and_the_point_is_no_longer_met(self):
+        class CitesNonsense(ScriptedModel):
+            def complete(self, system, user, temperature=0.0, max_tokens=4000):
+                response = ScriptedModel.complete(self, system, user, temperature, max_tokens)
+                if system == REVIEW_SYSTEM and "Requirement points:" in user:
+                    reply = json.loads(response.text)
+                    reply["points"][0]["evidence"] = [{"file": "src/Calc.cs", "line_start": 400, "line_end": 410}]
+                    reply["points"][1]["evidence"] = [{"file": "src/Other.cs", "line_start": 9, "line_end": 9}]
+                    return ChatResponse(json.dumps(reply), 1, 1, 0.1)
+                return response
+
+        review = ModelReviewer(CitesNonsense(), name="r").review(
+            self.change, points=[RequirementPoint("R1", "a"), RequirementPoint("R2", "b")]
+        )
+        self.assertEqual([(p.status, p.evidence, p.dropped_evidence) for p in review.points],
+                         [("cannot_tell", [], 1), ("cannot_tell", [], 1)])
+        self.assertIn("not part of this change", review.points[0].reason)
+
+    def test_valid_citations_are_kept_and_marked_as_touching_the_change(self):
+        report, _ = self.run_all()
+        first, second = report.original_review.points
+        self.assertEqual((first.evidence[0]["file"], first.evidence[0]["in_change"]), ("src/Calc.cs", True))
+        self.assertFalse(second.evidence[0]["in_change"])    # line 9 is shown but unchanged
+
+    def test_an_answer_that_changes_with_nothing_changed_is_not_scored(self):
+        class Unsteady(ScriptedModel):
+            def __init__(self):
+                ScriptedModel.__init__(self)
+                self.reviews = 0
+
+            def complete(self, system, user, temperature=0.0, max_tokens=4000):
+                response = ScriptedModel.complete(self, system, user, temperature, max_tokens)
+                if system == REVIEW_SYSTEM and "Requirement points:" in user:
+                    self.reviews += 1
+                    if self.reviews == 2:          # the repeat review of the unchanged change
+                        reply = json.loads(response.text)
+                        reply["points"][0]["status"] = "cannot_tell"
+                        return ChatResponse(json.dumps(reply), 1, 1, 0.1)
+                return response
+
+        report = run_controls(self.change, ModelPlanter(ScriptedModel(), self.repo, name="p"),
+                              ModelReviewer(Unsteady(), name="r"), count=3, kinds=(KIND_BUG, KIND_HARMLESS), workers=1)
+        self.assertEqual(report.unstable_points, ["R1"])
+        self.assertTrue(all(o.point_noticed is None for o in report.outcomes))
+        self.assertTrue(any("two identical reviews" in note for note in report.notes))
+
+    def test_withdrawing_a_met_on_a_harmless_edit_is_a_false_alarm(self):
+        class Jumpy(ScriptedModel):
+            def complete(self, system, user, temperature=0.0, max_tokens=4000):
+                response = ScriptedModel.complete(self, system, user, temperature, max_tokens)
+                if system == REVIEW_SYSTEM and "return (value);" in user:
+                    reply = json.loads(response.text)
+                    reply["points"][1]["status"] = "not_met"
+                    return ChatResponse(json.dumps(reply), 1, 1, 0.1)
+                return response
+
+        report = run_controls(self.change, ModelPlanter(ScriptedModel(), self.repo, name="p"),
+                              ModelReviewer(Jumpy(), name="r"), count=3, kinds=(KIND_BUG, KIND_HARMLESS))
+        outcome = {o.plant_id: o for o in report.outcomes}["p03"]
+        self.assertEqual((outcome.flagged, outcome.correct), (True, False))
+        self.assertEqual(summarise(report)["false_alarms"], 1)
+
     def test_noticing_a_broken_point_counts_as_catching_it_even_without_a_line(self):
         class NoticesByPoint(ScriptedModel):
             def complete(self, system, user, temperature=0.0, max_tokens=4000):
@@ -341,6 +417,19 @@ class SmallPieceTests(unittest.TestCase):
         self.assertEqual([(p.id, p.status) for p in parsed], [("R1", "met"), ("R2", "cannot_tell"), ("R3", "cannot_tell")])
         self.assertEqual(parsed[0].evidence, [{"file": "A.cs", "line_start": 7, "line_end": 7}])
         self.assertEqual(parse_points(None, []), [])
+
+    def test_a_bug_must_change_code_not_just_comments_or_spacing(self):
+        self.assertFalse(changes_code(["  x = 1;  // set x"], ["x=1; // assign"]))
+        self.assertTrue(changes_code(["x = 1;"], ["x = 2;"]))
+        head = "a\nx = 1; // note\nb"
+        comment_only = {"kind": "bug", "line_start": 2, "line_end": 2, "original": "x = 1; // note", "replacement": "x = 1; // other"}
+        self.assertIsNone(apply_edit("F.cs", head, [(2, 2)], comment_only))
+        self.assertIsNotNone(apply_edit("F.cs", head, [(2, 2)], dict(comment_only, kind="harmless")))
+        self.assertIsNotNone(apply_edit("F.cs", head, [(2, 2)], dict(comment_only, replacement="x = 2; // note")))
+
+    def test_check_evidence_leaves_other_statuses_alone(self):
+        points = parse_points([{"id": "R1", "status": "not_met", "evidence": []}], [RequirementPoint("R1", "a")])
+        self.assertEqual(check_evidence(points, "")[0].status, "not_met")
 
     def test_locate_trusts_the_quoted_text_over_the_numbers(self):
         lines = ["a", "  b", "c"]

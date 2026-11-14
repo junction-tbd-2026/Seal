@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Sequence
 
 from .llm import ModelError
-from .matcher import finding_hits_plant, score_plant
+from .diffs import same_file
+from .matcher import DEFAULT_TOLERANCE_LINES, finding_hits_plant, score_plant
 from .models import KIND_BUG, KIND_HARMLESS, Change, ControlOutcome, Plant, RequirementPoint, ReviewResult, RunReport
 from .planter import Planter
 from .reviewer import Reviewer
@@ -27,19 +28,51 @@ def point_status(review: ReviewResult, point_id: Optional[str]) -> Optional[str]
     return next((point.status for point in review.points if point.id == point_id), None)
 
 
-def score(plant: Plant, variant: ReviewResult, original: ReviewResult) -> ControlOutcome:
+def sits_in_cited_lines(plant: Plant, original: ReviewResult) -> bool:
+    """True when the planted edit is inside the lines the reviewer itself cited for that point."""
+    cited = next((point.evidence for point in original.points if point.id == plant.breaks), [])
+    return any(
+        same_file(ref["file"], plant.file)
+        and plant.line_start <= ref["line_end"] + DEFAULT_TOLERANCE_LINES
+        and plant.line_end >= ref["line_start"] - DEFAULT_TOLERANCE_LINES
+        for ref in cited
+    )
+
+
+def score(
+    plant: Plant,
+    variant: ReviewResult,
+    original: ReviewResult,
+    unstable: Sequence[str] = (),
+) -> ControlOutcome:
     """Grade one variant.
 
     A planted defect counts as caught when the reviewer flags the planted spot, or stops
-    calling the requirement point it breaks "met". A spot the reviewer already flagged in
-    the real change proves nothing and is marked inconclusive.
+    calling the requirement point it breaks "met". A harmless edit counts as a false alarm
+    when the reviewer flags it, or withdraws a "met" it gave the real change.
+
+    Points whose answer changed between two identical reviews are ignored: a change of
+    answer there proves nothing. So is a spot the reviewer already flagged in the real change.
     """
     outcome = score_plant(plant, variant.findings, variant.reviewer)
     outcome.point_id = plant.breaks
-    if plant.breaks and point_status(original, plant.breaks) == "met":
-        outcome.point_noticed = point_status(variant, plant.breaks) != "met"
-        if plant.should_be_flagged and outcome.point_noticed:
-            outcome.correct = True
+
+    if plant.breaks:
+        outcome.point_link = "confirmed" if sits_in_cited_lines(plant, original) else "unconfirmed"
+        if point_status(original, plant.breaks) == "met" and plant.breaks not in unstable:
+            outcome.point_noticed = point_status(variant, plant.breaks) != "met"
+            if plant.should_be_flagged and outcome.point_noticed:
+                outcome.correct = True
+
+    if not plant.should_be_flagged:
+        withdrew = any(
+            point.status == "met" and point.id not in unstable and point_status(variant, point.id) != "met"
+            for point in original.points
+        )
+        if withdrew:
+            outcome.flagged = True
+            outcome.correct = False
+
     if any(finding_hits_plant(f, plant) for f in original.findings):
         outcome.inconclusive = True
     return outcome
@@ -96,6 +129,26 @@ def run_controls(
     if report.original_review.error:
         report.notes.append("The review of the real change failed: {}".format(report.original_review.error))
 
+    # Control for chance: review the unchanged change a second time. A point that gets a
+    # different answer with nothing changed cannot be used to judge the planted copies.
+    if report.requirement_points and not report.original_review.error:
+        _say(progress, "Reviewing the real change a second time, unchanged")
+        report.repeat_review = reviewer.review(change, variant_id="repeat", points=report.requirement_points)
+        if report.repeat_review.error:
+            report.notes.append("The repeat review failed, so chance changes of answer were not ruled out.")
+        else:
+            report.unstable_points = [
+                point.id
+                for point in report.requirement_points
+                if point_status(report.original_review, point.id) != point_status(report.repeat_review, point.id)
+            ]
+            if report.unstable_points:
+                report.notes.append(
+                    "The reviewer answered differently on two identical reviews for {}; those points are not scored.".format(
+                        ", ".join(report.unstable_points)
+                    )
+                )
+
     _say(progress, "Reviewing {} variants blind".format(len(report.plants)))
 
     def review_variant(plant: Plant) -> ReviewResult:
@@ -112,7 +165,7 @@ def run_controls(
         if variant.error:
             report.notes.append("Review of {} failed and is left out of the score: {}".format(plant.id, variant.error))
             continue
-        report.outcomes.append(score(plant, variant, report.original_review))
+        report.outcomes.append(score(plant, variant, report.original_review, report.unstable_points))
 
     _say(progress, "Rerunning the review with the requirement altered")
     if report.original_review.meets_requirement is not True:
@@ -138,6 +191,8 @@ def run_controls(
                 report.requirement_flip_changed_verdict = flipped.meets_requirement is not True
 
     reviews = [report.original_review] + report.variant_reviews
+    if report.repeat_review:
+        reviews.append(report.repeat_review)
     if report.altered_requirement_review:
         reviews.append(report.altered_requirement_review)
     report.prompt_tokens = sum(r.prompt_tokens for r in reviews)

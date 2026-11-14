@@ -8,14 +8,18 @@
 **Every claim points at evidence, and every approval is tested: the AI's and
 the human's.**
 
-1. Split the requirement into a few checkable points. The AI reviewer must
-   say, for each point, whether the change meets it and which lines show it.
-   A point with nothing to show for it is "cannot tell", not "met".
-2. Test the reviewer on this exact change. Break each point in a copy of the
-   change and see whether the reviewer notices. Its "met" counts only where
-   it noticed.
-3. Test the person who signs. Now and then the code shown for sign-off is one
-   of those broken copies. Accepting it is recorded, and nothing is approved.
+1. Split the requirement into a few checkable points, written without sight
+   of the code. The AI reviewer must say, for each point, whether the change
+   meets it and which lines show it. Citations are checked: lines that are
+   not in the change are thrown out, and a point left with nothing cited is
+   "cannot tell", not "met".
+2. Test the reviewer on this exact change. Break the very lines it cited for
+   a point, in a copy, and see whether it still says "met". Its "met" counts
+   only where it noticed.
+3. Test the person who signs. For a share of pull requests the code first
+   shown for sign-off is one of those broken copies. Accepting it is
+   recorded, and nothing is approved. Accept stays locked until every marked
+   spot has been opened.
 
 The named owner signs what is left: the points, the evidence, and the spots
 where nobody has shown the reviewer can see.
@@ -108,6 +112,12 @@ Thirty supports "at least 90%". The tier sets the number.
 
 - **Cost and time.** Each planted copy is one more review. Ten copies means
   eleven reviews. Tiering and spot-checking keep this proportionate.
+- **What we check by rule, and what we do not.** By rule: a planted bug must
+  change code, not comments; a citation must point at lines in the change; a
+  planted break is credited to a point only when it sits inside the lines the
+  reviewer cited for that point; a point whose answer changes between two
+  identical reviews is not scored. Not by rule: whether a planted bug really
+  changes behaviour. That needs the code to run.
 - **Optimism.** Planted defects are usually easier to catch than real ones.
   Reversing real past bug fixes from the project's history narrows the gap.
 - **Noise versus coverage.** A stricter reviewer catches more and raises more
