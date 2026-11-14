@@ -15,6 +15,8 @@ from .llm import ChatClient, ModelError, as_int, extract_json
 from .models import Change, Finding, ReviewResult
 
 MAX_DIFF_CHARS = 120000
+# Room for the reply. Models that think before answering spend part of this on the thinking.
+MAX_REPLY_TOKENS = 8000
 
 REVIEW_SYSTEM = """You are a senior engineer reviewing a pull request against its requirement.
 Report real problems only: defects, behaviour the requirement needs that is missing or wrong, regressions,
@@ -93,9 +95,17 @@ def parse_findings(raw: Any) -> List[Finding]:
 class ModelReviewer(Reviewer):
     """A reviewer reachable through an OpenAI-compatible chat endpoint."""
 
-    def __init__(self, client: ChatClient, name: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        client: ChatClient,
+        name: Optional[str] = None,
+        max_diff_chars: int = MAX_DIFF_CHARS,
+        max_tokens: int = MAX_REPLY_TOKENS,
+    ) -> None:
         self.client = client
         self.name = name or client.model
+        self.max_diff_chars = max_diff_chars
+        self.max_tokens = max_tokens
 
     def review(
         self,
@@ -106,10 +116,10 @@ class ModelReviewer(Reviewer):
     ) -> ReviewResult:
         requirement = requirement_override if requirement_override is not None else change.requirement_text
         diff = variant_diff if variant_diff is not None else change.diff
-        user = "Requirement:\n{}\n\nChange:\n{}".format(requirement.strip(), fit_diff(diff))
+        user = "Requirement:\n{}\n\nChange:\n{}".format(requirement.strip(), fit_diff(diff, self.max_diff_chars))
         result = ReviewResult(reviewer=self.name, variant_id=variant_id)
         try:
-            response = self.client.complete(REVIEW_SYSTEM, user, temperature=0.0, max_tokens=4000)
+            response = self.client.complete(REVIEW_SYSTEM, user, temperature=0.0, max_tokens=self.max_tokens)
             result.prompt_tokens = response.prompt_tokens
             result.completion_tokens = response.completion_tokens
             result.seconds = response.seconds

@@ -10,6 +10,7 @@ from reviewer_controls.config import (
     load_settings,
     parse_keys_file,
     require,
+    reviewer_prefixes,
     status,
 )
 
@@ -57,6 +58,15 @@ class ConfigTests(unittest.TestCase):
             require({"OTHER": FAKE}, "REVIEWER_API_KEY")
         self.assertIn("REVIEWER_API_KEY", str(caught.exception))
         self.assertNotIn(FAKE, str(caught.exception))
+
+    def test_extra_reviewers_are_optional(self):
+        self.assertEqual(reviewer_prefixes({}), ["REVIEWER"])
+        self.assertEqual(reviewer_prefixes({"REVIEWER2_MODEL": "m", "REVIEWER3_MODEL": ""}), ["REVIEWER", "REVIEWER2"])
+
+    def test_numbered_reviewer_settings_can_come_from_the_environment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            settings = load_settings({KEYS_FILE_ENV: str(Path(folder) / "absent.env"), "REVIEWER2_MODEL": "m"})
+            self.assertEqual(settings.get("REVIEWER2_MODEL"), "m")
 
     def test_status_never_reveals_the_value(self):
         self.assertEqual(status({"A": FAKE}, "A"), "set")

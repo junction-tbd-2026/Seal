@@ -56,7 +56,7 @@ def load_settings(environ: Optional[Mapping[str, str]] = None) -> Dict[str, str]
             )
         settings.update(parse_keys_file(keys_file.read_text()))
 
-    for name in list(settings) + [n for n in env if n.startswith(("PLANTER_", "REVIEWER_"))]:
+    for name in list(settings) + [n for n in env if n.startswith(("PLANTER_", "REVIEWER"))]:
         if env.get(name):
             settings[name] = env[name]
     return settings
@@ -72,6 +72,14 @@ def require(settings: Mapping[str, str], name: str) -> str:
             )
         )
     return value
+
+
+REVIEWER_PREFIXES = ("REVIEWER", "REVIEWER2", "REVIEWER3", "REVIEWER4")
+
+
+def reviewer_prefixes(settings: Mapping[str, str]) -> list:
+    """Which reviewers are configured. The first is always expected; the rest are optional."""
+    return [p for p in REVIEWER_PREFIXES if p == "REVIEWER" or settings.get(p + "_MODEL")]
 
 
 def status(settings: Mapping[str, str], name: str) -> str:

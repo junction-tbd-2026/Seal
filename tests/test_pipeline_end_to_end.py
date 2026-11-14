@@ -202,6 +202,26 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual([(p.line_start, p.description) for p in plants],
                          [(5, "if (value < max)"), (5, "if (value > max + 1)")])
 
+    def test_a_second_reviewer_sits_the_same_exam(self):
+        model = ScriptedModel()
+        planter = ModelPlanter(model, self.repo, name="planter-model")
+        first = run_controls(self.change, planter, ModelReviewer(model, name="one"),
+                             count=3, kinds=(KIND_BUG, KIND_HARMLESS))
+        second = run_controls(self.change, planter, ModelReviewer(model, name="two"),
+                              count=3, kinds=(KIND_BUG, KIND_HARMLESS),
+                              plants=first.plants, altered_requirement=first.altered_requirement)
+        self.assertIs(second.plants, first.plants)
+        self.assertEqual(second.altered_requirement, first.altered_requirement)
+        self.assertEqual(sum(1 for system, _ in model.calls if system == PLANT_SYSTEM), 1)
+        self.assertEqual(sum(1 for system, _ in model.calls if system == ALTER_SYSTEM), 1)
+        self.assertEqual(summarise(second), summarise(first))
+        self.assertEqual(second.reviewer, "two")
+
+    def test_reviewer_diff_budget_is_respected(self):
+        model = ScriptedModel()
+        ModelReviewer(model, name="small", max_diff_chars=200).review(self.change)
+        self.assertIn("Not shown", model.calls[-1][1])
+
     def test_same_model_for_both_roles_is_noted(self):
         model = ScriptedModel()
         report = run_controls(self.change, ModelPlanter(model, self.repo), ModelReviewer(model), count=1)

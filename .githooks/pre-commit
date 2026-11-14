@@ -43,7 +43,7 @@ if [ -f "$keys_file" ]; then
 fi
 
 # 3. Strings shaped like provider keys.
-pattern='nvapi-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,}|hf_[A-Za-z0-9]{30,}|gh[pousr]_[A-Za-z0-9]{30,}|(^|[^A-Za-z0-9])a[ks]-[A-Za-z0-9]{20,}'
+pattern='(^|[^A-Za-z0-9])(dc|rc)_[A-Fa-f0-9]{32,}|nvapi-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,}|hf_[A-Za-z0-9]{30,}|gh[pousr]_[A-Za-z0-9]{30,}|(^|[^A-Za-z0-9])a[ks]-[A-Za-z0-9]{20,}'
 hits=$(printf '%s\n' "$added_lines" | grep -E -c -- "$pattern")
 if [ "$hits" -gt 0 ]; then
   echo "BLOCKED: $hits staged line(s) contain a string shaped like an API key."

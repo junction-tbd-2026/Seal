@@ -12,19 +12,32 @@ from typing import List, Optional
 from . import __version__
 from .card import render_card
 from .changes import ChangeLoadError, load_change
-from .config import KeysFileInRepoError, MissingKeyError, load_settings, require, status
+from .config import KeysFileInRepoError, MissingKeyError, load_settings, require, reviewer_prefixes, status
 from .controls import run_controls, summarise
 from .llm import ChatClient
 from .models import KIND_BUG, PLANT_KINDS
 from .planter import ModelPlanter
-from .reviewer import ModelReviewer
+from .reviewer import MAX_DIFF_CHARS, MAX_REPLY_TOKENS, ModelReviewer
 from .stats import floor_if_all_caught
 
 DEFAULT_REPO = "work/junction26-messagepack-csharp"
-SETTING_NAMES = (
-    "PLANTER_BASE_URL", "PLANTER_MODEL", "PLANTER_API_KEY",
-    "REVIEWER_BASE_URL", "REVIEWER_MODEL", "REVIEWER_API_KEY",
-)
+PLANTER_SETTINGS = ("PLANTER_BASE_URL", "PLANTER_MODEL", "PLANTER_API_KEY")
+
+
+def client_for(settings, prefix: str) -> ChatClient:
+    """Model client for one role, e.g. PLANTER, REVIEWER or REVIEWER2."""
+    return ChatClient(
+        require(settings, prefix + "_BASE_URL"),
+        require(settings, prefix + "_MODEL"),
+        require(settings, prefix + "_API_KEY"),
+    )
+
+
+def whole_number(settings, name: str, default: int) -> int:
+    try:
+        return max(1, int(settings.get(name) or default))
+    except ValueError:
+        return default
 
 STEPS = (
     "Load the change and its requirement",
@@ -82,49 +95,67 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     )
 
+    prefixes = reviewer_prefixes(settings)
     if args.dry_run:
-        print("Settings: " + ", ".join("{} {}".format(name, status(settings, name)) for name in SETTING_NAMES))
+        names = list(PLANTER_SETTINGS) + [p + suffix for p in prefixes for suffix in ("_BASE_URL", "_MODEL", "_API_KEY")]
+        print("Settings: " + ", ".join("{} {}".format(name, status(settings, name)) for name in names))
         return 0
 
     repo = Path(args.repo or settings.get("SAMPLE_REPO_PATH") or DEFAULT_REPO)
     try:
-        planter_client = ChatClient(
-            require(settings, "PLANTER_BASE_URL"), require(settings, "PLANTER_MODEL"), require(settings, "PLANTER_API_KEY")
-        )
-        reviewer_client = ChatClient(
-            require(settings, "REVIEWER_BASE_URL"), require(settings, "REVIEWER_MODEL"), require(settings, "REVIEWER_API_KEY")
-        )
+        planter = ModelPlanter(client_for(settings, "PLANTER"), repo)
+        reviewers = [
+            (
+                ModelReviewer(
+                    client_for(settings, prefix),
+                    max_diff_chars=whole_number(settings, prefix + "_MAX_DIFF_CHARS", MAX_DIFF_CHARS),
+                    max_tokens=whole_number(settings, prefix + "_MAX_TOKENS", MAX_REPLY_TOKENS),
+                ),
+                whole_number(settings, prefix + "_WORKERS", args.workers),
+            )
+            for prefix in prefixes
+        ]
         change = load_change(repo, args.change, Path(args.requirements_dir), args.requirement)
     except (MissingKeyError, ChangeLoadError) as error:
         print("error: {}".format(error), file=sys.stderr)
         return 2
 
-    report = run_controls(
-        change,
-        ModelPlanter(planter_client, repo),
-        ModelReviewer(reviewer_client),
-        count=args.plants,
-        kinds=args.kinds,
-        workers=args.workers,
-        progress=print,
-    )
-
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem = "{}__{}__{}".format(slug(change.id), slug(report.reviewer), report.created_at.replace(":", ""))
-    report_path = out_dir / (stem + ".json")
-    card_path = out_dir / (stem + ".card.md")
-    report_path.write_text(json.dumps(report.to_dict(), indent=2))
-    card_path.write_text(render_card(report))
 
-    counts = summarise(report)
-    print(
-        "Done: {} of {} planted defects caught, {} of {} harmless edits wrongly flagged.".format(
-            counts["defects_caught"], counts["defects_total"], counts["false_alarms"], counts["harmless_total"]
+    # Every reviewer is tested on the same planted variants, so the results compare fairly.
+    plants = None
+    altered = None
+    lines = []
+    for reviewer, workers in reviewers:
+        print("--- Reviewer: {}".format(reviewer.name))
+        report = run_controls(
+            change, planter, reviewer,
+            count=args.plants, kinds=args.kinds, workers=workers, progress=print,
+            plants=plants, altered_requirement=altered,
         )
-    )
-    print("Report: {}".format(report_path))
-    print("Card:   {}".format(card_path))
+        plants = report.plants
+        altered = report.altered_requirement or altered
+
+        stem = "{}__{}__{}".format(slug(change.id), slug(report.reviewer), report.created_at.replace(":", ""))
+        card_path = out_dir / (stem + ".card.md")
+        (out_dir / (stem + ".json")).write_text(json.dumps(report.to_dict(), indent=2))
+        card_path.write_text(render_card(report))
+
+        counts = summarise(report)
+        lines.append(
+            "{}: {} of {} planted defects caught, {} of {} harmless edits wrongly flagged, "
+            "{} reviews failed. Card: {}".format(
+                report.reviewer, counts["defects_caught"], counts["defects_total"],
+                counts["false_alarms"], counts["harmless_total"], counts["failed_reviews"], card_path,
+            )
+        )
+        for note in report.notes:
+            print("  note: {}".format(note))
+
+    print("Done.")
+    for line in lines:
+        print("  " + line)
     return 0
 
 

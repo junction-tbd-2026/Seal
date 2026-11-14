@@ -37,7 +37,14 @@ def run_controls(
     kinds: Sequence[str] = (KIND_BUG,),
     workers: int = 4,
     progress: Progress = None,
+    plants: Optional[List[Plant]] = None,
+    altered_requirement: Optional[str] = None,
 ) -> RunReport:
+    """Run the controls for one reviewer.
+
+    Pass `plants` and `altered_requirement` from an earlier run to test a second
+    reviewer on exactly the same variants, so the two can be compared fairly.
+    """
     started = time.time()
     report = RunReport(
         change=change,
@@ -48,8 +55,12 @@ def run_controls(
     if planter.name == reviewer.name:
         report.notes.append("Planter and reviewer are the same model, so the reviewer is graded on its own style of bug.")
 
-    _say(progress, "Planting {} variants ({})".format(count, ", ".join(kinds)))
-    report.plants = planter.plant(change, count, kinds)
+    if plants is not None:
+        _say(progress, "Reusing {} planted variants".format(len(plants)))
+        report.plants = plants
+    else:
+        _say(progress, "Planting {} variants ({})".format(count, ", ".join(kinds)))
+        report.plants = planter.plant(change, count, kinds)
     if len(report.plants) < count:
         report.notes.append("Asked for {} planted variants; {} were usable.".format(count, len(report.plants)))
 
@@ -80,10 +91,13 @@ def run_controls(
             "Altered-requirement check skipped: the reviewer did not say the real change meets the requirement."
         )
     else:
-        try:
-            report.altered_requirement = planter.alter_requirement(change)
-        except ModelError as error:
-            report.notes.append("Could not write an altered requirement: {}".format(error))
+        if altered_requirement:
+            report.altered_requirement = altered_requirement
+        else:
+            try:
+                report.altered_requirement = planter.alter_requirement(change)
+            except ModelError as error:
+                report.notes.append("Could not write an altered requirement: {}".format(error))
         if report.altered_requirement:
             flipped = reviewer.review(
                 change, variant_id="altered-requirement", requirement_override=report.altered_requirement
