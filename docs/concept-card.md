@@ -11,15 +11,17 @@ the human's.**
 1. Split the requirement into a few checkable points, written without sight
    of the code. The AI reviewer must say, for each point, whether the change
    meets it and which lines show it. Citations are checked: lines that are
-   not in the change are thrown out, and a point left with nothing cited is
-   "cannot tell", not "met".
-2. Test the reviewer on this exact change. Break the very lines it cited for
-   a point, in a copy, and see whether it still says "met". Its "met" counts
-   only where it noticed.
+   not in the change are thrown out, so is a citation of more than 25 lines,
+   and a point left with nothing cited is "cannot tell", not "met".
+2. Test the reviewer on this exact change. The real change is reviewed
+   first. Then the very lines it cited for each point are broken, in a copy,
+   to see whether it still says "met". Its "met" counts only where it
+   noticed.
 3. Test the person who signs. For a share of pull requests the code first
    shown for sign-off is one of those broken copies. Accepting it is
-   recorded, and nothing is approved. Accept stays locked until every marked
-   spot has been opened.
+   recorded, and nothing is approved. Accept stays locked until the signer
+   has opened every marked spot and said "looks right" or "looks wrong"
+   for each. Those verdicts are stored with the signature.
 
 The named owner signs what is left: the points, the evidence, and the spots
 where nobody has shown the reviewer can see.
@@ -53,17 +55,20 @@ review of the places where the AI reviewer proved blind is the right one.
 
 1. An AI agent opens a pull request against a requirement.
 2. The check starts automatically. The requirement is split into points.
-3. A planter model writes small edits to the changed lines: bugs, omissions
-   and harmless rewrites. Each bug or omission is aimed at one point.
-4. The AI reviewer judges each point on the real change and on every planted
-   copy, blind. A planted defect is caught when the reviewer flags the spot or
-   stops calling that point met.
-5. The review is rerun with the requirement altered. If the verdict does not
+3. The AI reviewer judges each point on the real change, twice, and cites
+   lines for each.
+4. A planter model writes small edits inside the cited lines: bugs,
+   omissions and harmless rewrites. Every point the reviewer called met gets
+   at least one break before any point gets a second.
+5. The reviewer judges every planted copy, blind. A planted defect is caught
+   when the reviewer flags the spot or stops calling that point met.
+6. The review is rerun with the requirement altered. If the verdict does not
    move, the reviewer was not checking against the requirement.
-6. The pull request gets a status and a link, for example "caught 1 of 3
+7. The pull request gets a status and a link, for example "caught 1 of 3
    planted defects, 2 places need a human".
-7. The owner opens the link, reads the marked lines, and signs: accept,
-   reject, or send for a full read. The first copy shown may be a spot-check.
+8. The owner opens the link, reads the marked lines, gives a verdict on
+   each, and signs: accept, reject, or send for a full read. The first copy
+   shown may be a spot-check.
 
 ## What the owner signs
 
@@ -78,7 +83,7 @@ review of the places where the AI reviewer proved blind is the right one.
 | The lines where a planted defect went unseen | Scoring |
 | What the reviewer refused to decide | The review |
 | What was not checked at all | Fixed list, stated every time |
-| The owner's name, decision and time | The sign-off |
+| The owner's name, decision, time and verdict on each marked spot | The sign-off |
 
 ## How trust is measured
 
@@ -94,7 +99,7 @@ gets, and it is withdrawn when a real defect escapes.
 | Share routed to humans | Lines marked "read yourself" as a share of changed lines |
 | Reverts and incidents do not rise as review time falls | Escapes are logged against the area and lower its trust; planted-catch rate must stay above the area's floor |
 | Time to merge | Time from pull request to signature, recorded on the card |
-| Humans stay accountable | Share of spot-check copies each signer refuses; an accepted copy is logged with the time taken |
+| Humans stay accountable | Share of spot-check copies each signer refuses, and share where they marked the planted spot itself as wrong; an accepted copy is logged with the time taken |
 
 ## Depth follows risk
 
@@ -113,8 +118,8 @@ Thirty supports "at least 90%". The tier sets the number.
 - **Cost and time.** Each planted copy is one more review. Ten copies means
   eleven reviews. Tiering and spot-checking keep this proportionate.
 - **What we check by rule, and what we do not.** By rule: a planted bug must
-  change code, not comments; a citation must point at lines in the change; a
-  planted break is credited to a point only when it sits inside the lines the
+  change code, not comments; a citation must point at lines in the change
+  and cover at most 25 of them; a planted break is credited to a point only when it sits inside the lines the
   reviewer cited for that point; a point whose answer changes between two
   identical reviews is not scored. Not by rule: whether a planted bug really
   changes behaviour. That needs the code to run.
@@ -145,6 +150,8 @@ not a different idea: the planted copies become the test of the attacker.
 - If the planter and the reviewer share a blind spot, that class of defect is
   never planted and never missed.
 - A per-change result rests on few samples. Treat it as a gate, not a grade.
+- A point whose only cited proof is a test is marked as such, because the
+  tests are not run here.
 - The requirement points are written by a model. A wrong or missing point
   goes unnoticed unless the owner reads the requirement.
 - Spot-checking people only works as an agreed practice. Done covertly it

@@ -12,13 +12,14 @@ from pathlib import Path
 
 from reviewer_controls.card import render_card
 from reviewer_controls.changes import ChangeLoadError, load_change
-from reviewer_controls.controls import run_controls, summarise
+from reviewer_controls.controls import cited_targets, run_controls, summarise
 from reviewer_controls.diffs import render_numbered, split_diff
 from reviewer_controls.llm import ChatResponse, ModelError, extract_json
 from reviewer_controls.models import KIND_BUG, KIND_HARMLESS
 from reviewer_controls.pipeline import load_plants, save_plants
 from reviewer_controls.planter import (
     ALTER_SYSTEM, PLANT_SYSTEM, POINTS_SYSTEM, ModelPlanter, allocate, apply_edit, candidate_files, changes_code, locate,
+    merge_similar,
 )
 from reviewer_controls.models import RequirementPoint
 from reviewer_controls.reviewer import REVIEW_SYSTEM, ModelReviewer, check_evidence, fit_diff, parse_points
@@ -231,6 +232,34 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual((by_plant["p02"].point_id, by_plant["p02"].point_noticed), ("R1", False))
         self.assertEqual((by_plant["p03"].point_id, by_plant["p03"].point_noticed), (None, None))
 
+    def test_the_real_change_is_reviewed_before_anything_is_planted(self):
+        _, model = self.run_all()
+        order = [system for system, _ in model.calls]
+        self.assertLess(order.index(REVIEW_SYSTEM), order.index(PLANT_SYSTEM))
+        plant_prompt = [user for system, user in model.calls if system == PLANT_SYSTEM][0]
+        self.assertIn("Lines a reviewer cited as evidence", plant_prompt)
+        self.assertIn("R1: 5-8", plant_prompt)
+
+    def test_a_break_outside_the_cited_lines_is_not_used(self):
+        targets = {"R2": [{"file": "src/Calc.cs", "line_start": 9, "line_end": 9}]}     # only line 9 was cited
+        points = [RequirementPoint("R1", "a"), RequirementPoint("R2", "b")]
+        planter = ModelPlanter(ScriptedModel(), self.repo, name="p")
+        plants = planter.plant(self.change, 3, (KIND_BUG, KIND_HARMLESS), points, targets)
+        self.assertEqual([(p.kind, p.line_start) for p in plants], [("harmless", 9)])    # both bugs sat at lines 5 and 7
+        self.assertTrue(any("outside the changed or cited lines" in problem for problem in planter.problems))
+
+    def test_a_break_is_credited_to_the_point_whose_cited_lines_it_sits_in(self):
+        targets = {"R2": [{"file": "src/Calc.cs", "line_start": 5, "line_end": 8}]}
+        points = [RequirementPoint("R1", "a"), RequirementPoint("R2", "b")]
+        plants = ModelPlanter(ScriptedModel(), self.repo, name="p").plant(self.change, 3, (KIND_BUG, KIND_HARMLESS), points, targets)
+        self.assertEqual([p.breaks for p in plants], ["R2", "R2", None])     # the planter said R1; the lines say R2
+
+    def test_cited_targets_collects_only_points_called_met(self):
+        report, _ = self.run_all()
+        report.original_review.points[1].status = "cannot_tell"
+        self.assertEqual(cited_targets([report.original_review, report.original_review]),
+                         {"R1": [{"file": "src/Calc.cs", "line_start": 5, "line_end": 8, "in_change": True}]})
+
     def test_checklist_is_written_without_sight_of_the_code(self):
         _, model = self.run_all()
         prompt = [user for system, user in model.calls if system == POINTS_SYSTEM][0]
@@ -426,6 +455,25 @@ class SmallPieceTests(unittest.TestCase):
         self.assertIsNone(apply_edit("F.cs", head, [(2, 2)], comment_only))
         self.assertIsNotNone(apply_edit("F.cs", head, [(2, 2)], dict(comment_only, kind="harmless")))
         self.assertIsNotNone(apply_edit("F.cs", head, [(2, 2)], dict(comment_only, replacement="x = 2; // note")))
+
+    def test_points_that_say_the_same_thing_are_merged(self):
+        texts = [
+            "The source generator does not throw IndexOutOfRangeException for a closed generic value type from a referenced assembly.",
+            "The analyzer does not throw IndexOutOfRangeException for a closed generic value type from a referenced assembly.",
+            "The generated output contains a resolver for the type.",
+            "",
+        ]
+        self.assertEqual(merge_similar(texts), [texts[0], texts[2]])
+
+    def test_a_citation_covering_too_many_lines_does_not_count(self):
+        diff = "diff --git a/A.cs b/A.cs\n--- a/A.cs\n+++ b/A.cs\n@@ -1,0 +1,60 @@\n" + "+x\n" * 60
+        raw = [{"id": "R1", "status": "met", "evidence": [{"file": "A.cs", "line_start": 1, "line_end": 60}]},
+               {"id": "R2", "status": "met", "evidence": [{"file": "A.cs", "line_start": 1, "line_end": 60},
+                                                         {"file": "A.cs", "line_start": 10, "line_end": 14}]}]
+        first, second = check_evidence(parse_points(raw, [RequirementPoint("R1", "a"), RequirementPoint("R2", "b")]), diff)
+        self.assertEqual((first.status, first.broad_evidence, first.evidence), ("cannot_tell", 1, []))
+        self.assertIn("too broad", first.reason)
+        self.assertEqual((second.status, second.broad_evidence, len(second.evidence)), ("met", 1, 1))
 
     def test_check_evidence_leaves_other_statuses_alone(self):
         points = parse_points([{"id": "R1", "status": "not_met", "evidence": []}], [RequirementPoint("R1", "a")])

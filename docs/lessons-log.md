@@ -29,6 +29,10 @@ Each entry says what we expected, what happened, and what we changed.
 | 20 | Only a share of pull requests is spot-checked, and the page says so. | A check on every first opening is predictable after one surprise. |
 | 21 | Accept is locked until every marked spot has been opened. | In our own trial a person accepted a planted copy within seconds, without looking at anything. |
 | 22 | One reviewer is shown by default; the comparison is one click away. | A signer does not need two machines disagreeing. Comparing reviewers is a question for whoever chooses the reviewer. |
+| 23 | The real change is reviewed before anything is planted, and the planted breaks go inside the lines the reviewer cited. Every point gets one break before any gets a second. | Planting first and hoping the edits landed in cited lines left most points untested. |
+| 24 | A citation of more than 25 lines does not count, and near-duplicate checklist points are merged. | A reviewer that cites a whole file has pointed at nothing, and any break in that file would be credited to the point. |
+| 25 | The signer gives a verdict on each marked spot, "looks right" or "looks wrong". Accept needs every verdict, and none of them "wrong". | Opening a spot is a click. A verdict is a statement the signer can be held to, and the spot-check can compare it with what was planted. |
+| 26 | A point whose only cited proof is a test is labelled on the page. | The tests are not run here, so a test that exists says less than it seems to. |
 
 ## Failures we saw
 
@@ -42,6 +46,7 @@ Each entry says what we expected, what happened, and what we changed.
 | 6 | A large reviewer and a much smaller open one scored similarly on the first change. | Model size did not predict catch rate here. Again, too few samples. | Keep testing both on identical planted edits. With four changes the larger model pulled ahead. |
 | 7 | Several reviews were thrown away because the reply contained a fragment like `items[0]` before the answer, and that fragment was read as the answer. | Model replies need to be searched for the answer, not read from the first thing that parses. | The reader now looks for the first value shaped like an answer. |
 | 8 | The first page was a scrolling story with a headline. Users asked when anyone would open it. | A review tool lives where the work is: on a pull request. | Rebuilt as a list of pull requests with a workspace per pull request. |
+| 9 | With breaks planted before the review, only two of five points on the first change received a break that could be counted. | A test nobody aimed tests little. | See decision 23. |
 
 ## What we would not trust in our own output
 

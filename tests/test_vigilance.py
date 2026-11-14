@@ -90,6 +90,31 @@ class VigilanceTests(unittest.TestCase):
         self.assertFalse(real["spot_check"])
         self.assertEqual([(e["name"], e["decision"]) for e in signoffs_for(self.results, "c1")], [("Ada", "accept")])
 
+    def test_marking_the_planted_spot_as_wrong_is_recorded(self):
+        vigilance = Vigilance(self.results)
+        spots = [{"plant_id": "p02", "verdict": "wrong"}, {"plant_id": "p01", "verdict": "right"}, {"plant_id": "x", "verdict": "?"}]
+        result = vigilance.sign(vigilance.open("c1")["session"], "big", "Grace", "reject", spots)
+        self.assertEqual((result["caught"], result["spotted"]), (True, True))
+        missed = Vigilance(self.results)
+        result = missed.sign(missed.open("c1")["session"], "big", "Bob", "reject", [{"plant_id": "p02", "verdict": "right"}])
+        self.assertEqual((result["caught"], result["spotted"]), (True, False))   # refused it, but called the planted spot right
+        same_lines = Vigilance(self.results)
+        result = same_lines.sign(same_lines.open("c1")["session"], "big", "Eve", "reject", [{"plant_id": "p01", "verdict": "wrong"}])
+        self.assertEqual((result["caught"], result["spotted"]), (True, True))    # another planted edit on the same lines is the same place
+
+    def test_spot_verdicts_are_kept_with_a_real_sign_off(self):
+        vigilance = Vigilance(self.results, enabled=False)
+        spots = [{"plant_id": "p02", "verdict": "right"}, {"plant_id": "p01", "verdict": "nonsense"}]
+        vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "accept", spots)
+        self.assertEqual(signoffs_for(self.results, "c1")[0]["spots"], [{"plant_id": "p02", "verdict": "right"}])
+
+    def test_proof_that_is_only_a_test_is_flagged(self):
+        data = run("big", "2026-11-14T05:00:00Z", self.plants, set())
+        data["original_review"]["points"][0]["evidence"] = [{"file": "tests/ATests.cs", "line_start": 3, "line_end": 4}]
+        (self.results / "big.json").write_text(json.dumps(data))
+        big = [r for r in build_exam(self.results, "c1")["reviewers"] if r["name"] == "big"][0]
+        self.assertTrue(big["points"][0]["tests_only"])
+
     def test_rejecting_a_planted_copy_counts_as_a_catch(self):
         vigilance = Vigilance(self.results)
         result = vigilance.sign(vigilance.open("c1")["session"], "big", "Grace", "full_read")

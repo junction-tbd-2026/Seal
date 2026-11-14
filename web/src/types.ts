@@ -39,6 +39,10 @@ export type PointView = {
   aimed_elsewhere?: number;
   /** Citations thrown out because the lines are not in the change. */
   dropped_evidence?: number;
+  /** Of those, citations that covered too many lines to count. */
+  broad_evidence?: number;
+  /** Every line it cites is in a test file, and the tests were not run. */
+  tests_only?: boolean;
   missed_plants: string[];
 };
 
@@ -71,7 +75,16 @@ export type Reviewer = {
   notes: string[];
 };
 
-export type SignOff = { change_id: string; reviewer: string; name: string; decision: string; signed_at: string };
+export type SpotVerdict = "right" | "wrong";
+
+export type SignOff = {
+  change_id: string;
+  reviewer: string;
+  name: string;
+  decision: string;
+  signed_at: string;
+  spots?: { plant_id: string; verdict: SpotVerdict }[];
+};
 
 export type Exam = {
   change: {
@@ -131,4 +144,4 @@ export type PullList = {
 /** What signing returns: either a recorded sign-off, or the reveal that the copy shown was a spot-check. */
 export type SignResult =
   | { spot_check: false; signoff: SignOff }
-  | { spot_check: true; caught: boolean; seconds: number; plant: Plant; record: SpotRecord };
+  | { spot_check: true; caught: boolean; spotted: boolean; seconds: number; plant: Plant; record: SpotRecord };

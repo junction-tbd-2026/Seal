@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .llm import ModelError
 from .diffs import same_file
@@ -78,6 +78,35 @@ def score(
     return outcome
 
 
+def cited_targets(reviews: Sequence[ReviewResult]) -> Dict[str, List[dict]]:
+    """For each requirement point, the lines any of these reviews cited as evidence that it is met."""
+    targets: Dict[str, List[dict]] = {}
+    for review in reviews:
+        for point in review.points:
+            if point.status != "met":
+                continue
+            for ref in point.evidence:
+                if ref not in targets.setdefault(point.id, []):
+                    targets[point.id].append(ref)
+    return targets
+
+
+def first_reviews(
+    change: Change,
+    reviewer: Reviewer,
+    points: Sequence[RequirementPoint],
+    progress: Progress = None,
+) -> Tuple[ReviewResult, Optional[ReviewResult]]:
+    """Review the real change, then review it again unchanged as a control for chance."""
+    _say(progress, "Reviewing the real change")
+    original = reviewer.review(change, points=list(points))
+    repeat = None
+    if points and not original.error:
+        _say(progress, "Reviewing the real change a second time, unchanged")
+        repeat = reviewer.review(change, variant_id="repeat", points=list(points))
+    return original, repeat
+
+
 def run_controls(
     change: Change,
     planter: Planter,
@@ -89,11 +118,17 @@ def run_controls(
     plants: Optional[List[Plant]] = None,
     altered_requirement: Optional[str] = None,
     points: Optional[List[RequirementPoint]] = None,
+    original_review: Optional[ReviewResult] = None,
+    repeat_review: Optional[ReviewResult] = None,
 ) -> RunReport:
     """Run the controls for one reviewer.
 
-    Pass `plants`, `points` and `altered_requirement` from an earlier run to test a second
-    reviewer on exactly the same variants, so the two can be compared fairly.
+    The order matters. The real change is reviewed first, so the planted edits can be aimed
+    at the very lines the reviewer cited: "we broke what you pointed at; did you notice?"
+
+    To compare reviewers fairly, review the real change with each (`first_reviews`), plant
+    once against all their citations, then pass `plants`, `points`, `original_review` and
+    `repeat_review` to this function for each reviewer.
     """
     started = time.time()
     report = RunReport(
@@ -114,33 +149,23 @@ def run_controls(
             report.notes.append("The requirement could not be split into points: {}".format(error))
     report.requirement_points = points or []
 
-    if plants is not None:
-        _say(progress, "Reusing {} planted variants".format(len(plants)))
-        report.plants = plants
-    else:
-        _say(progress, "Planting {} variants ({})".format(count, ", ".join(kinds)))
-        report.plants = planter.plant(change, count, kinds, report.requirement_points)
-        report.notes.extend(getattr(planter, "problems", []))
-    if len(report.plants) < count:
-        report.notes.append("Asked for {} planted variants; {} were usable.".format(count, len(report.plants)))
+    if original_review is None:
+        original_review, repeat_review = first_reviews(change, reviewer, report.requirement_points, progress)
+    report.original_review = original_review
+    report.repeat_review = repeat_review
+    if original_review.error:
+        report.notes.append("The review of the real change failed: {}".format(original_review.error))
 
-    _say(progress, "Reviewing the real change")
-    report.original_review = reviewer.review(change, points=report.requirement_points)
-    if report.original_review.error:
-        report.notes.append("The review of the real change failed: {}".format(report.original_review.error))
-
-    # Control for chance: review the unchanged change a second time. A point that gets a
-    # different answer with nothing changed cannot be used to judge the planted copies.
-    if report.requirement_points and not report.original_review.error:
-        _say(progress, "Reviewing the real change a second time, unchanged")
-        report.repeat_review = reviewer.review(change, variant_id="repeat", points=report.requirement_points)
-        if report.repeat_review.error:
+    # Control for chance: a point that gets a different answer with nothing changed
+    # cannot be used to judge the planted copies.
+    if repeat_review is not None:
+        if repeat_review.error:
             report.notes.append("The repeat review failed, so chance changes of answer were not ruled out.")
         else:
             report.unstable_points = [
                 point.id
                 for point in report.requirement_points
-                if point_status(report.original_review, point.id) != point_status(report.repeat_review, point.id)
+                if point_status(original_review, point.id) != point_status(repeat_review, point.id)
             ]
             if report.unstable_points:
                 report.notes.append(
@@ -148,6 +173,16 @@ def run_controls(
                         ", ".join(report.unstable_points)
                     )
                 )
+
+    if plants is not None:
+        _say(progress, "Reusing {} planted variants".format(len(plants)))
+        report.plants = plants
+    else:
+        _say(progress, "Planting {} variants ({}) inside the lines the reviewer cited".format(count, ", ".join(kinds)))
+        report.plants = planter.plant(change, count, kinds, report.requirement_points, cited_targets([original_review]))
+        report.notes.extend(getattr(planter, "problems", []))
+    if len(report.plants) < count:
+        report.notes.append("Asked for {} planted variants; {} were usable.".format(count, len(report.plants)))
 
     _say(progress, "Reviewing {} variants blind".format(len(report.plants)))
 
@@ -165,10 +200,10 @@ def run_controls(
         if variant.error:
             report.notes.append("Review of {} failed and is left out of the score: {}".format(plant.id, variant.error))
             continue
-        report.outcomes.append(score(plant, variant, report.original_review, report.unstable_points))
+        report.outcomes.append(score(plant, variant, original_review, report.unstable_points))
 
     _say(progress, "Rerunning the review with the requirement altered")
-    if report.original_review.meets_requirement is not True:
+    if original_review.meets_requirement is not True:
         report.notes.append(
             "Altered-requirement check skipped: the reviewer did not say the real change meets the requirement."
         )
@@ -190,9 +225,9 @@ def run_controls(
             else:
                 report.requirement_flip_changed_verdict = flipped.meets_requirement is not True
 
-    reviews = [report.original_review] + report.variant_reviews
-    if report.repeat_review:
-        reviews.append(report.repeat_review)
+    reviews = [original_review] + report.variant_reviews
+    if repeat_review:
+        reviews.append(repeat_review)
     if report.altered_requirement_review:
         reviews.append(report.altered_requirement_review)
     report.prompt_tokens = sum(r.prompt_tokens for r in reviews)

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .changes import file_at
-from .diffs import FileDiff, file_diff_text, overlaps_added, replace_file_in_diff, split_diff
+from .diffs import FileDiff, file_diff_text, overlaps_added, replace_file_in_diff, same_file, split_diff
 from .llm import ChatClient, ModelError, as_int, extract_json
 from .models import KIND_BUG, KIND_HARMLESS, KIND_OMISSION, Change, Plant, RequirementPoint
 
@@ -53,9 +53,10 @@ Reply with JSON only, in this shape:
 
 POINTS_SYSTEM = """You turn a software requirement into a short checklist a code reviewer can verify.
 You are given the requirement only. You have not seen any code written for it, and you must not guess at one.
-Write three to six points. Each point is one behaviour that must hold once the requirement is met, stated so
+Write three to five points. Each point is one behaviour that must hold once the requirement is met, stated so
 that a reviewer can say met, not met or cannot tell by reading a change. Say what must be true, not how to
-build it. Do not include points about style, tests or documentation.
+build it. No two points may say the same thing in different words: if the same lines of code would settle
+both, make them one point. Do not include points about style, tests or documentation.
 
 Reply with JSON only, in this shape:
 {"points": [{"id": "R1", "text": "one sentence"}]}"""
@@ -82,6 +83,7 @@ class Planter:
         count: int,
         kinds: Sequence[str] = (KIND_BUG,),
         points: Optional[List[RequirementPoint]] = None,
+        targets: Optional[Dict[str, List[dict]]] = None,
     ) -> List[Plant]:
         """Return up to `count` variants of `change`, one planted edit each."""
         raise NotImplementedError
@@ -89,6 +91,28 @@ class Planter:
     def alter_requirement(self, change: Change) -> str:
         """Return a requirement the change should no longer satisfy."""
         raise NotImplementedError
+
+
+_FILLER = {"a", "an", "the", "is", "are", "be", "of", "to", "in", "on", "for", "and", "or", "that", "when", "with", "does", "not", "it", "its", "from", "as", "by", "must", "no", "any"}
+
+
+def _words(text: str) -> set:
+    return {word for word in re.findall(r"[a-z0-9]+", text.lower()) if word not in _FILLER}
+
+
+def merge_similar(texts: Sequence[str], threshold: float = 0.6) -> List[str]:
+    """Drop a point that mostly repeats an earlier one, judged by the words they share."""
+    kept: List[str] = []
+    for text in texts:
+        if not text:
+            continue
+        words = _words(text)
+        repeats = any(
+            len(words & _words(other)) / max(1, len(words | _words(other))) >= threshold for other in kept
+        )
+        if not repeats:
+            kept.append(text)
+    return kept
 
 
 def is_plantable(file_diff: FileDiff) -> bool:
@@ -212,6 +236,7 @@ class ModelPlanter(Planter):
         self.name = name or client.model
         self.max_tokens = max_tokens
         self._points: List[RequirementPoint] = []
+        self._targets: Dict[str, List[dict]] = {}
         self.problems: List[str] = []   # why fewer variants came back than were asked for
 
     def split_requirement(self, change: Change) -> List[RequirementPoint]:
@@ -221,11 +246,8 @@ class ModelPlanter(Planter):
             self.client.complete(POINTS_SYSTEM, user, temperature=0.0, max_tokens=self.max_tokens).text,
             accept=lambda value: isinstance(value, dict) and isinstance(value.get("points"), list),
         )
-        points: List[RequirementPoint] = []
-        for item in reply["points"][:6]:
-            if isinstance(item, dict) and str(item.get("text") or "").strip():
-                points.append(RequirementPoint(id="R{}".format(len(points) + 1), text=str(item["text"]).strip()))
-        return points
+        texts = [str(item.get("text") or "").strip() for item in reply["points"] if isinstance(item, dict)]
+        return [RequirementPoint(id="R{}".format(n), text=text) for n, text in enumerate(merge_similar(texts)[:5], start=1)]
 
     def plant(
         self,
@@ -233,9 +255,20 @@ class ModelPlanter(Planter):
         count: int,
         kinds: Sequence[str] = (KIND_BUG,),
         points: Optional[List[RequirementPoint]] = None,
+        targets: Optional[Dict[str, List[dict]]] = None,
     ) -> List[Plant]:
+        """Write the planted variants.
+
+        `targets` maps a requirement point to the lines a reviewer cited as evidence for it.
+        When given, every bug and omission is placed inside the cited lines of one point, so
+        the test is: we broke the lines you pointed at, did you still say "met"?
+        """
         self._points = points or []
+        self._targets = targets or {}
         files = candidate_files(change)
+        if self._targets:
+            cited = [f for f in files if self._cited_in(f.path)]
+            files = cited or files
         if not files:
             return []
         plants: List[Plant] = []
@@ -249,20 +282,44 @@ class ModelPlanter(Planter):
             plants.extend(self._plant_in_file(change, file_diff, wanted_kinds, first_number=len(plants) + 1))
         return plants
 
+    def _cited_in(self, path: str) -> Dict[str, List[Tuple[int, int]]]:
+        """For one file: each point's cited line ranges."""
+        cited: Dict[str, List[Tuple[int, int]]] = {}
+        for point_id, refs in self._targets.items():
+            ranges = [(ref["line_start"], ref["line_end"]) for ref in refs if same_file(ref["file"], path)]
+            if ranges:
+                cited[point_id] = ranges
+        return cited
+
     def _plant_in_file(self, change: Change, file_diff: FileDiff, kinds: List[str], first_number: int) -> List[Plant]:
         head_text = file_at(self.repo, change.head_ref, file_diff.path)
         if head_text is None:
             return []
         base_text = file_at(self.repo, change.base_ref, file_diff.path)
+        cited = self._cited_in(file_diff.path)
         counts = {kind: kinds.count(kind) for kind in (KIND_BUG, KIND_OMISSION, KIND_HARMLESS) if kind in kinds}
         request = ", ".join("{} of kind \"{}\"".format(n + SPARE_PROPOSALS, kind) for kind, n in counts.items())
         listed = "".join("\n{}: {}".format(point.id, point.text) for point in self._points)
+        aim = ""
+        if cited:
+            aim = (
+                "\nLines a reviewer cited as evidence, by requirement point:{}\n"
+                "Every bug and omission must change code inside the cited lines of one point and name that point in "
+                "\"breaks\". Aim at least one at each point listed here.\n".format(
+                    "".join(
+                        "\n{}: {}".format(point_id, ", ".join("{}-{}".format(a, b) for a, b in ranges))
+                        for point_id, ranges in cited.items()
+                    )
+                )
+            )
+        shown_ranges = file_diff.added_ranges + [r for ranges in cited.values() for r in ranges]
         user = (
-            "Requirement:\n{}\n{}\nFile: {}\n\n{}\n\nPropose {}.".format(
+            "Requirement:\n{}\n{}{}\nFile: {}\n\n{}\n\nPropose {}.".format(
                 change.requirement_text.strip(),
                 "\nRequirement points:{}\n".format(listed) if listed else "",
+                aim,
                 file_diff.path,
-                numbered_excerpt(head_text, file_diff.added_ranges),
+                numbered_excerpt(head_text, shown_ranges),
                 request,
             )
         )
@@ -280,16 +337,14 @@ class ModelPlanter(Planter):
             self.problems.append("The planter's reply for {} was not a list of edits.".format(file_diff.path))
             return []
 
-        remaining = dict(counts)
+        known_points = {point.id for point in self._points}
+        usable = []     # (kind, breaks, description, difficulty, new_text, start, end)
         seen_texts = set()
-        plants: List[Plant] = []
         unusable = 0
         for proposal in proposals:
-            if not isinstance(proposal, dict):
-                unusable += 1
-                continue
-            kind = proposal.get("kind")
-            if remaining.get(kind, 0) <= 0:
+            kind = proposal.get("kind") if isinstance(proposal, dict) else None
+            if kind not in counts:
+                unusable += kind is None
                 continue
             applied = apply_edit(file_diff.path, head_text, file_diff.added_ranges, proposal)
             if applied is None:
@@ -301,8 +356,48 @@ class ModelPlanter(Planter):
             if new_text in seen_texts:
                 unusable += 1
                 continue
+            breaks = None
+            if kind != KIND_HARMLESS:
+                breaks = proposal.get("breaks") if proposal.get("breaks") in known_points else None
+                if cited:
+                    # The edit must sit inside the cited lines of a point; that point is the one it breaks.
+                    inside = [pid for pid, ranges in cited.items() if overlaps_added(ranges, start, end)]
+                    if not inside:
+                        unusable += 1
+                        continue
+                    breaks = breaks if breaks in inside else inside[0]
             seen_texts.add(new_text)
-            remaining[kind] -= 1
+            usable.append((kind, breaks, proposal, new_text, start, end))
+
+        # Cover every cited point once before giving any point a second edit, and
+        # prefer a new place over a second break of lines that are already broken.
+        chosen = []
+        remaining = dict(counts)
+        covered = set()
+
+        def crowds(item) -> bool:
+            harmless = item[0] == KIND_HARMLESS
+            return any(
+                (other[0] == KIND_HARMLESS) == harmless and item[4] <= other[5] and item[5] >= other[4]
+                for other in chosen
+            )
+
+        for only_new_points, only_new_lines in ((True, True), (False, True), (False, False)):
+            for item in usable:
+                kind, breaks = item[0], item[1]
+                if item in chosen or remaining.get(kind, 0) <= 0:
+                    continue
+                if only_new_points and (breaks is None or breaks in covered):
+                    continue
+                if only_new_lines and crowds(item):
+                    continue
+                chosen.append(item)
+                remaining[kind] -= 1
+                if breaks:
+                    covered.add(breaks)
+
+        plants: List[Plant] = []
+        for kind, breaks, proposal, new_text, start, end in chosen:
             plants.append(
                 Plant(
                     id="p{:02d}".format(first_number + len(plants)),
@@ -313,11 +408,7 @@ class ModelPlanter(Planter):
                     line_end=end,
                     patch=file_diff_text(file_diff.path, head_text, new_text),
                     difficulty=str(proposal.get("difficulty") or "medium"),
-                    breaks=(
-                        proposal.get("breaks")
-                        if kind != KIND_HARMLESS and proposal.get("breaks") in {point.id for point in self._points}
-                        else None
-                    ),
+                    breaks=breaks,
                     variant_diff=replace_file_in_diff(
                         change.diff, file_diff.path, file_diff_text(file_diff.path, base_text, new_text)
                     ),
@@ -325,8 +416,8 @@ class ModelPlanter(Planter):
             )
         if unusable:
             self.problems.append(
-                "{} of {} edits proposed for {} were unusable: the quoted text was not in the file, "
-                "the edit was outside the changed lines, it changed nothing, or it repeated another.".format(
+                "{} of {} edits proposed for {} were unusable: the quoted text was not in the file, the edit was "
+                "outside the changed or cited lines, it changed nothing, or it repeated another.".format(
                     unusable, len(proposals), file_diff.path
                 )
             )

@@ -124,8 +124,9 @@ class ExamTests(unittest.TestCase):
         }))
         self.save("a.json", run("big", "2026-11-14T03:00:00Z", self.plants, {"p01"}))
         listed = list_pulls(pulls_file, self.results)["pull_requests"]
+        # p02 and p04 were both missed on line 41: that is one place to read, not two.
         self.assertEqual([(p["number"], p["status"], p["lines_to_read"]) for p in listed],
-                         [(1, "needs_you", 2), (2, "untested", 0)])
+                         [(1, "needs_you", 1), (2, "untested", 0)])
         self.assertEqual(listed[0]["url"], "https://example.invalid/me/repo/pull/1")
         record_signoff(self.results, "ju26-issue-1", "big", "Ada", "accept")
         again = list_pulls(pulls_file, self.results)["pull_requests"][0]

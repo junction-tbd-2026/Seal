@@ -5,7 +5,7 @@ import { fetchPulls, fetchReview, fileName, postSignOff, prettyModel } from "./l
 import { Prose } from "./Prose";
 import { RequirementTable } from "./RequirementTable";
 import { SpotCheckReveal } from "./SpotCheck";
-import type { EvidenceRef, Exam, Plant, Pull, PullList, PullStatus, Reviewer, SignOff, SignResult } from "./types";
+import type { EvidenceRef, Exam, Plant, Pull, PullList, PullStatus, Reviewer, SignOff, SignResult, SpotVerdict } from "./types";
 
 const PRODUCT_NAME = "Reviewer Controls";
 
@@ -91,6 +91,7 @@ export default function App() {
   const [cited, setCited] = useState<{ pointId: string; evidence: EvidenceRef } | null>(null);
   const [showRequirement, setShowRequirement] = useState(false);
   const [visited, setVisited] = useState<Set<string>>(new Set());
+  const [verdicts, setVerdicts] = useState<Record<string, SpotVerdict>>({});
   const [showPoints, setShowPoints] = useState(true);
   const [reveal, setReveal] = useState<{ result: Extract<SignResult, { spot_check: true }>; name: string } | null>(null);
 
@@ -134,6 +135,7 @@ export default function App() {
     setFocus(null);
     setCited(null);
     setVisited(new Set());
+    setVerdicts({});
     setShowRequirement(false);
     if (pull.status !== "untested") void loadReview(pull.change_id, false);
     // Reload only when a different pull request is opened.
@@ -175,7 +177,8 @@ export default function App() {
 
   const sign = async (name: string, decision: string) => {
     if (!exam?.session || !reviewer) throw new Error("This review session has ended. Reload the pull request.");
-    const result = await postSignOff({ session: exam.session, reviewer: reviewer.name, name, decision });
+    const spots = reviewer.read_yourself.filter((id) => verdicts[id]).map((id) => ({ plant_id: id, verdict: verdicts[id] }));
+    const result = await postSignOff({ session: exam.session, reviewer: reviewer.name, name, decision, spots });
     if (result.spot_check) {
       setReveal({ result, name: name.trim() });
     } else {
@@ -187,6 +190,8 @@ export default function App() {
 
   const continueAfterReveal = () => {
     setReveal(null);
+    setVisited(new Set());
+    setVerdicts({});
     if (exam) void loadReview(exam.change.id, true);
   };
 
@@ -380,10 +385,13 @@ export default function App() {
               onReviewer={(name) => {
                 setReviewerName(name);
                 setVisited(new Set());
+                setVerdicts({});
                 setCited(null);
               }}
               signoffs={signoffs}
               visited={visited}
+              verdicts={verdicts}
+              onVerdict={(plantId, verdict) => setVerdicts((current) => ({ ...current, [plantId]: verdict }))}
               onSign={sign}
               onJump={jumpToPlant}
             />

@@ -46,7 +46,8 @@ class PointAssessment:
     status: str = "cannot_tell"      # met | not_met | cannot_tell
     evidence: List[dict] = field(default_factory=list)   # [{"file", "line_start", "line_end", "in_change"}]
     reason: str = ""
-    dropped_evidence: int = 0        # citations thrown out because the lines are not in the change
+    dropped_evidence: int = 0        # citations thrown out, for any reason
+    broad_evidence: int = 0          # of those, the ones that covered too many lines to count
 
 
 @dataclass

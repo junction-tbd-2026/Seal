@@ -20,7 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from .exam import build_exam, record_signoff, structured_diff
+from .diffs import same_file
+from .exam import build_exam, clean_spots, record_signoff, structured_diff
 
 LOG_FILE = "vigilance.jsonl"
 
@@ -86,6 +87,14 @@ class Vigilance:
                 # reload or a second request cannot use the spot-check up unseen.
                 exam["change"]["files"] = structured_diff(copy)
                 session["plant"] = plant
+                # A reader may mark another planted edit that sits on the same lines; that is the same place.
+                session["place"] = {
+                    other["id"]
+                    for other in exam.get("plants", [])
+                    if same_file(other["file"], plant["file"])
+                    and other["line_start"] <= plant["line_end"]
+                    and other["line_end"] >= plant["line_start"]
+                } | {plant["id"]}
 
         self._sessions[token] = session
         exam["session"] = token
@@ -97,14 +106,14 @@ class Vigilance:
             self._chosen[change_id] = self._rng() < self.rate
         return self._chosen[change_id]
 
-    def sign(self, token: str, reviewer: str, name: str, decision: str) -> Dict[str, Any]:
+    def sign(self, token: str, reviewer: str, name: str, decision: str, spots: Any = None) -> Dict[str, Any]:
         session = self._sessions.pop(token, None)
         if session is None:
             raise KeyError("this review session has ended; reload the pull request")
         seconds = round(time.time() - session["started"], 1)
         plant = session["plant"]
         if plant is None:
-            entry = record_signoff(self.results_dir, session["change_id"], reviewer, name, decision)
+            entry = record_signoff(self.results_dir, session["change_id"], reviewer, name, decision, spots)
             return {"spot_check": False, "signoff": entry}
 
         name = name.strip()
@@ -112,6 +121,9 @@ class Vigilance:
             self._sessions[token] = session    # nothing was decided; keep the session
             raise ValueError("a sign-off needs a name")
         caught = decision != "accept"
+        # Better than refusing the copy: did they mark the planted spot itself as wrong?
+        place = session.get("place") or {plant["id"]}
+        spotted = any(s["plant_id"] in place and s["verdict"] == "wrong" for s in clean_spots(spots))
         self._checked.add(session["change_id"])
         record = {
             "change_id": session["change_id"],
@@ -119,6 +131,7 @@ class Vigilance:
             "plant_id": plant["id"],
             "decision": decision,
             "caught": caught,
+            "spotted": spotted,
             "seconds": seconds,
             "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
@@ -128,6 +141,7 @@ class Vigilance:
         return {
             "spot_check": True,
             "caught": caught,
+            "spotted": spotted,
             "seconds": seconds,
             "plant": {key: plant[key] for key in ("id", "kind", "description", "file", "line_start", "line_end", "patch")},
             "record": self.record(),

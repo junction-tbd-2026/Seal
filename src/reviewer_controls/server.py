@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from typing import List
+
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -31,11 +33,17 @@ vigilance = Vigilance(
 )
 
 
+class Spot(BaseModel):
+    plant_id: str
+    verdict: str
+
+
 class SignOff(BaseModel):
     session: str
     reviewer: str
     name: str
     decision: str
+    spots: List[Spot] = []
 
 
 @app.get("/api/health")
@@ -76,7 +84,8 @@ def review(change_id: str) -> dict:
 @app.post("/api/signoff")
 def signoff(body: SignOff) -> dict:
     try:
-        return vigilance.sign(body.session, body.reviewer, body.name, body.decision)
+        spots = [{"plant_id": spot.plant_id, "verdict": spot.verdict} for spot in body.spots]
+        return vigilance.sign(body.session, body.reviewer, body.name, body.decision, spots)
     except KeyError as error:
         raise HTTPException(status_code=409, detail=str(error.args[0]))
     except ValueError as error:

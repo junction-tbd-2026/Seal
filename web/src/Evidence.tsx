@@ -2,7 +2,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useState } from "react";
 import { DiffView } from "./DiffView";
 import { KIND_LABEL, KIND_MEANING, RESULT_LABEL, RESULT_MEANING, fileName, formatWhen, prettyModel } from "./lib";
-import type { Exam, Plant, Result, Reviewer, SignOff } from "./types";
+import type { Exam, Plant, Result, Reviewer, SignOff, SpotVerdict } from "./types";
 
 const SQUARE: Record<Result, string> = {
   caught: "bg-caught",
@@ -45,6 +45,8 @@ export function Evidence({
   onReviewer,
   signoffs,
   visited,
+  verdicts,
+  onVerdict,
   onSign,
   onJump,
 }: {
@@ -54,6 +56,9 @@ export function Evidence({
   signoffs: SignOff[];
   /** Planted-edit ids of the red spots the reader has opened. */
   visited: Set<string>;
+  /** The reader's verdict on each red spot, by planted-edit id. */
+  verdicts: Record<string, SpotVerdict>;
+  onVerdict: (plantId: string, verdict: SpotVerdict) => void;
   onSign: (name: string, decision: string) => Promise<void>;
   onJump: (plant: Plant) => void;
 }) {
@@ -77,7 +82,8 @@ export function Evidence({
   const pickedPlant = picked ? plants.get(picked) ?? null : null;
   const mine = signoffs.filter((entry) => entry.reviewer === reviewer.name);
   const done = revealed >= exam.plants.length;
-  const unopened = toRead.filter((plant) => !visited.has(plant.id)).length;
+  const undecided = toRead.filter((plant) => !verdicts[plant.id]).length;
+  const wrong = toRead.filter((plant) => verdicts[plant.id] === "wrong").length;
 
   const verdict = reviewer.review_failed
     ? { text: "No usable answer", tone: "bg-warn" }
@@ -283,13 +289,32 @@ export function Evidence({
                       {fileName(plant.file)}:{plant.line_start}
                       {plant.line_end > plant.line_start ? `–${plant.line_end}` : ""}
                     </span>
-                    {visited.has(plant.id) && (
-                      <span className="float-right rounded-sm border-2 border-ink bg-panel px-1 text-[10.5px] font-bold uppercase">Opened</span>
-                    )}
                     <span className="mt-0.5 block text-[12.5px] leading-snug text-soft">
                       {plant.kind === "omission" ? "It did not notice when we removed needed code here." : "It did not notice a wrong line we put here."}
                     </span>
                   </button>
+                  <div className="mt-1.5 flex items-center gap-1.5 text-[12px]">
+                    {visited.has(plant.id) ? (
+                      <>
+                        <span className="text-soft">The real code here:</span>
+                        {(["right", "wrong"] as const).map((verdict) => (
+                          <button
+                            key={verdict}
+                            type="button"
+                            aria-pressed={verdicts[plant.id] === verdict}
+                            onClick={() => onVerdict(plant.id, verdict)}
+                            className={`rounded border-2 border-ink px-2 py-px font-bold ${
+                              verdicts[plant.id] === verdict ? (verdict === "right" ? "bg-caught text-white" : "bg-missed text-white") : "bg-panel hover:bg-canvas"
+                            }`}
+                          >
+                            {verdict === "right" ? "Looks right" : "Looks wrong"}
+                          </button>
+                        ))}
+                      </>
+                    ) : (
+                      <span className="text-faint">Open it, then say what you think.</span>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -357,8 +382,8 @@ export function Evidence({
             <button
               key={decision.value}
               type="button"
-              disabled={busy || !name.trim() || (decision.value === "accept" && unopened > 0)}
-              title={decision.value === "accept" && unopened > 0 ? "Open every red spot before accepting" : undefined}
+              disabled={busy || !name.trim() || (decision.value === "accept" && (undecided > 0 || wrong > 0))}
+              title={decision.value === "accept" && (undecided > 0 || wrong > 0) ? "Give a verdict on every red spot first" : undefined}
               onClick={() => sign(decision.value)}
               className={`press rounded-md px-2 py-1.5 text-[13px] font-bold ${decision.style}`}
             >
@@ -366,11 +391,17 @@ export function Evidence({
             </button>
           ))}
         </div>
-        {unopened > 0 && (
+        {wrong > 0 ? (
           <p className="mt-2 text-[12px] font-medium leading-snug">
-            Accept unlocks once you have opened {unopened === 1 ? "the remaining red spot" : `the ${unopened} remaining red spots`}. You can
-            reject or ask for a full read at any time.
+            You marked {wrong === 1 ? "a spot" : `${wrong} spots`} as wrong, so this cannot be accepted. Reject it or ask for a full read.
           </p>
+        ) : (
+          undecided > 0 && (
+            <p className="mt-2 text-[12px] font-medium leading-snug">
+              Accept unlocks once you have given a verdict on {undecided === 1 ? "the remaining red spot" : `the ${undecided} remaining red spots`}.
+              You can reject or ask for a full read at any time.
+            </p>
+          )
         )}
         {error && (
           <p role="alert" className="mt-2 text-[12.5px] font-medium text-missed">

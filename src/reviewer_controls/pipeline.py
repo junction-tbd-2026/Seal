@@ -14,8 +14,8 @@ from . import __version__
 from .card import render_card
 from .changes import ChangeLoadError, load_change
 from .config import KeysFileInRepoError, MissingKeyError, load_settings, require, reviewer_prefixes, status
-from .controls import run_controls, summarise
-from .llm import ChatClient
+from .controls import cited_targets, first_reviews, run_controls, summarise
+from .llm import ChatClient, ModelError
 from .models import KIND_BUG, PLANT_KINDS, Plant, RequirementPoint
 from .planter import PLANT_REPLY_TOKENS, ModelPlanter
 from .reviewer import MAX_DIFF_CHARS, MAX_REPLY_TOKENS, ModelReviewer
@@ -80,8 +80,9 @@ def whole_number(settings, name: str, default: int) -> int:
 STEPS = (
     "Load the change and its requirement",
     "Split the requirement into checkable points",
-    "Plant {plants} variants ({kinds}), each breaking one point",
-    "Review the real change and every variant blind, each in a fresh session",
+    "Review the real change, twice, with every reviewer",
+    "Plant {plants} variants ({kinds}) inside the lines the reviewers cited",
+    "Review every variant blind, each in a fresh session",
     "Match findings to planted locations",
     "Rerun the review with the requirement altered",
     "Write the run report and the sign-off card to {out}/",
@@ -185,16 +186,36 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("error: cannot reuse planted variants from {}: {}".format(args.plants_from, error), file=sys.stderr)
             return 2
     plants_saved = bool(args.plants_from)
+
+    # Review the real change with every reviewer first, then plant once, inside the lines
+    # any of them cited. Each reviewer is then tested on breaks of what it pointed at.
+    firsts = {}
+    if plants is None:
+        print("Splitting the requirement into points")
+        try:
+            points = planter.split_requirement(change)
+        except ModelError as error:
+            points = []
+            print("  note: the requirement could not be split into points: {}".format(error))
+        for reviewer, _ in reviewers:
+            print("--- First review: {}".format(reviewer.name))
+            firsts[reviewer.name] = first_reviews(change, reviewer, points, progress=print)
+        targets = cited_targets([original for original, _ in firsts.values()])
+        print("Planting {} variants ({}) inside the cited lines".format(args.plants, ", ".join(args.kinds)))
+        plants = planter.plant(change, args.plants, args.kinds, points, targets)
+        for problem in planter.problems:
+            print("  note: {}".format(problem))
+
     lines = []
     for reviewer, workers in reviewers:
         print("--- Reviewer: {}".format(reviewer.name))
+        original, repeat = firsts.get(reviewer.name, (None, None))
         report = run_controls(
             change, planter, reviewer,
             count=args.plants, kinds=args.kinds, workers=workers, progress=print,
             plants=plants, altered_requirement=altered, points=points,
+            original_review=original, repeat_review=repeat,
         )
-        plants = report.plants
-        points = report.requirement_points
         altered = report.altered_requirement or altered
         if not plants_saved and plants:
             plants_path = out_dir / "{}__plants__{}.json".format(slug(change.id), report.created_at.replace(":", ""))

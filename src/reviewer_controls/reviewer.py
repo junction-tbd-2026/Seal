@@ -17,6 +17,8 @@ from .models import Change, Finding, PointAssessment, RequirementPoint, ReviewRe
 MAX_DIFF_CHARS = 120000
 # Room for the reply. Models that think before answering spend part of this on the thinking.
 MAX_REPLY_TOKENS = 16000
+# A citation longer than this is too broad to count as pointing at something.
+MAX_CITED_LINES = 25
 
 REVIEW_SYSTEM = """You are a senior engineer reviewing a pull request against its requirement.
 Report real problems only: defects, behaviour the requirement needs that is missing or wrong, regressions,
@@ -29,8 +31,9 @@ Decide whether the change meets the requirement. If you cannot decide something 
 say so instead of guessing.
 
 When requirement points are listed, judge each one separately: "met", "not_met" or "cannot_tell".
-For every point you call met, cite the lines in the change that make it so. A point with no lines to
-show for it is "cannot_tell", not "met".
+For every point you call met, cite the lines in the change that make it so. Cite the smallest range that
+shows it: a citation longer than 25 lines does not count. A point with no lines to show for it is
+"cannot_tell", not "met".
 
 Reply with JSON only, in this shape:
 {"meets_requirement": true, "findings": [{"file": "path/to/file", "line_start": 10, "line_end": 12,
@@ -143,12 +146,20 @@ def check_evidence(points: List[PointAssessment], diff: str) -> List[PointAssess
             lines = set(range(ref["line_start"], ref["line_end"] + 1))
             if path is None or not (lines & files[path]["shown"]):
                 continue
+            if len(lines) > MAX_CITED_LINES:
+                point.broad_evidence += 1
+                continue
             kept.append(dict(ref, file=path, in_change=bool(lines & files[path]["added"])))
         point.dropped_evidence = len(point.evidence) - len(kept)
         point.evidence = kept
         if point.status == "met" and not kept:
             point.status = "cannot_tell"
-            point.reason = (point.reason + " The lines it cited are not part of this change.").strip()
+            why = (
+                " Its citations were too broad to count as evidence."
+                if point.broad_evidence
+                else " The lines it cited are not part of this change."
+            )
+            point.reason = (point.reason + why).strip()
     return points
 
 

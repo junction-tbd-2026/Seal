@@ -114,11 +114,18 @@ export function RequirementTable({
                     </span>
                   ) : (
                     <span className="text-[12px] text-faint">
-                      {point.dropped_evidence ? "It cited lines that are not in this change" : "Nothing cited"}
+                      {point.broad_evidence
+                        ? "Its citations covered too many lines to count"
+                        : point.dropped_evidence
+                          ? "It cited lines that are not in this change"
+                          : "Nothing cited"}
                     </span>
                   )}
                 </td>
                 <td className={`px-2 py-2 ${noticed.style}`}>
+                  {point.tests_only && point.status === "met" && (
+                    <span className="mb-1 block text-[11.5px] font-medium leading-snug">Its only proof is a test, and the tests were not run.</span>
+                  )}
                   <span className="font-bold">{noticed.label}</span>
                   <span className="block text-[11.5px] leading-snug text-soft">{noticed.detail}</span>
                 </td>

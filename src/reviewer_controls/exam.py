@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .card import supported_claim
-from .diffs import _HUNK_HEADER, split_diff
+from .diffs import _HUNK_HEADER, same_file, split_diff
 from .matcher import finding_hits_plant
 from .models import KIND_HARMLESS, Finding, Plant
+from .planter import is_test_file
 
 SIGNOFF_FILE = "signoffs.jsonl"
 
@@ -97,6 +98,20 @@ def _result(plant: Dict[str, Any], review: Optional[Dict[str, Any]], outcome: Op
     return "caught" if outcome.get("correct", outcome["flagged"]) else "missed"
 
 
+def distinct_places(plants: List[dict]) -> List[str]:
+    """Ids of these planted edits, keeping one per place: two misses on the same lines are one spot to read."""
+    kept: List[dict] = []
+    for plant in plants:
+        if not any(
+            same_file(plant["file"], other["file"])
+            and plant["line_start"] <= other["line_end"]
+            and plant["line_end"] >= other["line_start"]
+            for other in kept
+        ):
+            kept.append(plant)
+    return [plant["id"] for plant in kept]
+
+
 def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
     plants = run["plants"]
     reviews = {r["variant_id"]: r for r in run.get("variant_reviews", [])}
@@ -145,6 +160,9 @@ def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
                 "broken_noticed": noticed,
                 "aimed_elsewhere": len(aimed) - len(broken),
                 "dropped_evidence": claim.get("dropped_evidence", 0),
+                "broad_evidence": claim.get("broad_evidence", 0),
+                # Proof that is only a test counts for little here: the tests were not run.
+                "tests_only": bool(claim.get("evidence")) and all(is_test_file(ref["file"]) for ref in claim["evidence"]),
                 "noticed": "unstable" if unstable
                 else "untested" if not broken
                 else "yes" if noticed == len(broken)
@@ -175,7 +193,7 @@ def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
         },
         "claim": supported_claim(caught, len(defects)),
         "requirement_flip_changed_verdict": run.get("requirement_flip_changed_verdict"),
-        "read_yourself": [p["id"] for p in defects if results[p["id"]] == "missed"],
+        "read_yourself": distinct_places([p for p in defects if results[p["id"]] == "missed"]),
         "tokens_in": run.get("prompt_tokens", 0),
         "tokens_out": run.get("completion_tokens", 0),
         "seconds": run.get("wall_seconds", 0.0),
@@ -282,7 +300,23 @@ def list_pulls(pulls_file: Path, results_dir: Path) -> Dict[str, Any]:
     }
 
 
-def record_signoff(results_dir: Path, change_id: str, reviewer: str, name: str, decision: str) -> Dict[str, Any]:
+def clean_spots(spots: Any) -> List[Dict[str, str]]:
+    """The signer's verdict on each marked spot: "right" or "wrong". Anything else is dropped."""
+    cleaned = []
+    for spot in spots or []:
+        if isinstance(spot, dict) and spot.get("plant_id") and spot.get("verdict") in ("right", "wrong"):
+            cleaned.append({"plant_id": str(spot["plant_id"]), "verdict": spot["verdict"]})
+    return cleaned
+
+
+def record_signoff(
+    results_dir: Path,
+    change_id: str,
+    reviewer: str,
+    name: str,
+    decision: str,
+    spots: Any = None,
+) -> Dict[str, Any]:
     """Append a named human's decision. A sign-off is never edited, only added to."""
     name = name.strip()
     if not name:
@@ -294,6 +328,7 @@ def record_signoff(results_dir: Path, change_id: str, reviewer: str, name: str, 
         "reviewer": reviewer,
         "name": name[:120],
         "decision": decision,
+        "spots": clean_spots(spots),
         "signed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     results_dir.mkdir(parents=True, exist_ok=True)

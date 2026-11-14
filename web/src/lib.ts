@@ -1,4 +1,4 @@
-import type { ChangeSummary, Exam, PlantKind, PullList, Result, SignResult } from "./types";
+import type { ChangeSummary, Exam, PlantKind, PullList, Result, SignResult, SpotVerdict } from "./types";
 
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -13,7 +13,13 @@ export const fetchPulls = () => getJson<PullList>("/api/pulls");
 /** The change to show for sign-off. It may be a spot-check copy; the page cannot tell and must not try to. */
 export const fetchReview = (changeId: string) => getJson<Exam>(`/api/review/${encodeURIComponent(changeId)}`);
 
-export async function postSignOff(body: { session: string; reviewer: string; name: string; decision: string }): Promise<SignResult> {
+export async function postSignOff(body: {
+  session: string;
+  reviewer: string;
+  name: string;
+  decision: string;
+  spots: { plant_id: string; verdict: SpotVerdict }[];
+}): Promise<SignResult> {
   const response = await fetch("/api/signoff", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
