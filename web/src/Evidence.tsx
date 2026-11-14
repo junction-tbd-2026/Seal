@@ -122,7 +122,7 @@ export function Evidence({
           ))}
         </div>
 
-        <Block title="The reviewer says" tone={verdict.tone}>
+        <Block title="1 · What the AI reviewer found in the real code" tone={verdict.tone}>
           <p className="text-[19px] font-bold leading-tight">{verdict.text}</p>
           {reviewer.findings.length > 0 ? (
             <ul className="mt-2 space-y-1.5 text-[13px]">
@@ -136,11 +136,19 @@ export function Evidence({
               ))}
             </ul>
           ) : (
-            !reviewer.review_failed && <p className="mt-1 text-[13px] text-soft">It reported no problems in this change.</p>
+            !reviewer.review_failed && (
+              <p className="mt-1 text-[13px] text-soft">
+                It reported no problems. That is its opinion, not proof: the next step checks how much that opinion is worth.
+              </p>
+            )
           )}
         </Block>
 
-        <Block title="We tested that reviewer on this change">
+        <Block title="2 · Can we believe it? We tested the reviewer">
+          <p className="mb-3 text-[12.5px] leading-snug text-soft">
+            We hid mistakes of our own in copies of this change and asked the same reviewer to review each copy.{" "}
+            <strong className="text-ink">None of these mistakes are in the real code.</strong>
+          </p>
           <div className="flex items-end justify-between gap-3">
             <p className="text-[34px] font-extrabold leading-none tracking-tight">
               {done ? reviewer.counts.defects_caught : "–"}
@@ -150,7 +158,7 @@ export function Evidence({
               Replay
             </button>
           </div>
-          <p className="mt-1 text-[13px] font-medium">planted defects caught</p>
+          <p className="mt-1 text-[13px] font-medium">of our planted mistakes caught</p>
 
           <div className="mt-3 flex flex-wrap gap-1.5" role="list" aria-label="Planted edits">
             {exam.plants.map((plant, index) => {
@@ -236,7 +244,13 @@ export function Evidence({
           </ul>
         </Block>
 
-        <Block title={toRead.length > 0 ? `Read these ${toRead.length === 1 ? "lines" : `${toRead.length} places`} yourself` : "Nothing singled out to read"}>
+        <Block title={toRead.length > 0 ? `3 · Check ${toRead.length === 1 ? "this spot" : `these ${toRead.length} spots`} yourself` : "3 · Nothing extra to check"}>
+          {toRead.length > 0 && (
+            <p className="mb-2 text-[12.5px] leading-snug text-soft">
+              Not known bugs. The reviewer missed what we planted here, so if the real code has a similar mistake in these spots, it would have
+              missed that too.
+            </p>
+          )}
           {toRead.length > 0 ? (
             <ul className="space-y-2">
               {toRead.map((plant) => (
@@ -251,7 +265,7 @@ export function Evidence({
                       {plant.line_end > plant.line_start ? `–${plant.line_end}` : ""}
                     </span>
                     <span className="mt-0.5 block text-[12.5px] leading-snug text-soft">
-                      A planted {KIND_LABEL[plant.kind].toLowerCase()} here went unseen.
+                      {plant.kind === "omission" ? "It did not notice when we removed needed code here." : "It did not notice a wrong line we put here."}
                     </span>
                   </button>
                 </li>
@@ -260,7 +274,7 @@ export function Evidence({
           ) : (
             <p className="text-[13px] text-soft">
               {reviewer.counts.defects_total > 0
-                ? "Every planted defect that was scored was caught."
+                ? "The reviewer caught every mistake we planted, so its opinion on this change carries more weight."
                 : "No planted defects were scored. Treat the whole change as unreviewed."}
             </p>
           )}

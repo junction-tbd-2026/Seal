@@ -1,7 +1,18 @@
 import { useEffect, useRef } from "react";
 import type { FileDiff } from "./types";
 
-export type Mark = { start: number; end: number };
+/** "blind": the reviewer missed a mistake we planted here. "finding": the reviewer reported a problem here. */
+export type Mark = { start: number; end: number; tone: "blind" | "finding" };
+
+const MARK_ROW: Record<Mark["tone"], string> = {
+  blind: "bg-missed-wash shadow-[inset_5px_0_0_var(--color-missed)]",
+  finding: "bg-warn-wash shadow-[inset_5px_0_0_var(--color-warn)]",
+};
+
+const MARK_TAG: Record<Mark["tone"], { text: string; style: string }> = {
+  blind: { text: "Check this yourself", style: "bg-missed text-white" },
+  finding: { text: "Reviewer flagged this", style: "bg-warn text-ink" },
+};
 
 const ROW_STYLE: Record<string, string> = {
   add: "bg-caught-wash/60",
@@ -32,8 +43,13 @@ export function DiffView({
     scroller.current.scrollTo({ top: row.offsetTop - scroller.current.clientHeight / 3, behavior: "smooth" });
   }, [focus, file.path]);
 
-  const marked = (n: number | null) => n != null && marks.some((mark) => n >= mark.start && n <= mark.end);
-  const firstOfMark = (n: number | null) => n != null && marks.some((mark) => n === mark.start);
+  // A blind spot outranks a finding when both cover the same line.
+  const markAt = (n: number | null) =>
+    n == null
+      ? undefined
+      : marks.find((mark) => mark.tone === "blind" && n >= mark.start && n <= mark.end) ??
+        marks.find((mark) => n >= mark.start && n <= mark.end);
+  const tagAt = (n: number | null) => (n == null ? undefined : marks.find((mark) => n === mark.start));
 
   return (
     <div ref={scroller} className={`thin-scroll overflow-auto bg-panel font-mono text-[12.5px] leading-[1.7] ${className}`}>
@@ -50,17 +66,19 @@ export function DiffView({
               <tr
                 key={index}
                 data-line={row.n ?? undefined}
-                className={marked(row.n) ? "bg-missed-wash shadow-[inset_5px_0_0_var(--color-missed)]" : ROW_STYLE[row.kind]}
+                className={markAt(row.n) ? MARK_ROW[markAt(row.n)!.tone] : ROW_STYLE[row.kind]}
               >
                 <td className="w-14 select-none pl-3 pr-2 text-right align-top text-faint">{row.n ?? ""}</td>
                 <td className="w-4 select-none align-top font-bold text-faint">{SIGN[row.kind]}</td>
                 <td className="whitespace-pre pr-6 align-top">
-                  {row.text || " "}
-                  {firstOfMark(row.n) && (
-                    <span className="ml-3 inline-block -translate-y-px rounded-sm border-2 border-ink bg-missed px-1.5 font-sans text-[10.5px] font-bold uppercase leading-[1.5] tracking-wide text-white">
-                      Read this
+                  {tagAt(row.n) && (
+                    <span
+                      className={`mr-2 inline-block rounded-sm border-2 border-ink px-1.5 font-sans text-[10.5px] font-bold uppercase leading-[1.5] tracking-wide ${MARK_TAG[tagAt(row.n)!.tone].style}`}
+                    >
+                      {MARK_TAG[tagAt(row.n)!.tone].text}
                     </span>
                   )}
+                  {tagAt(row.n) ? row.text.trimStart() : row.text || " "}
                 </td>
               </tr>
             ),

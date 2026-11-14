@@ -3,13 +3,13 @@ import { DiffView } from "./DiffView";
 import { Evidence } from "./Evidence";
 import { fetchExam, fetchPulls, fileName, prettyModel } from "./lib";
 import { Prose } from "./Prose";
-import type { Exam, Plant, Pull, PullList, PullStatus, SignOff } from "./types";
+import type { Exam, Plant, Pull, PullList, PullStatus, Reviewer, SignOff } from "./types";
 
 const PRODUCT_NAME = "Reviewer Controls";
 
 const STATUS: Record<PullStatus, { label: (pull: Pull) => string; chip: string; dot: string }> = {
   needs_you: {
-    label: (pull) => `${pull.lines_to_read} ${pull.lines_to_read === 1 ? "place" : "places"} to read`,
+    label: (pull) => `${pull.lines_to_read} ${pull.lines_to_read === 1 ? "spot" : "spots"} to check yourself`,
     chip: "bg-missed text-white",
     dot: "bg-missed",
   },
@@ -17,6 +17,28 @@ const STATUS: Record<PullStatus, { label: (pull: Pull) => string; chip: string; 
   signed: { label: (pull) => `Signed by ${pull.signed?.name ?? "someone"}`, chip: "bg-ink text-white", dot: "bg-ink" },
   untested: { label: () => "Not tested yet", chip: "bg-panel text-soft", dot: "bg-hair" },
 };
+
+/** One plain sentence: what the reviewer said about the real code, how it did when tested, and what to do. */
+function summarise(reviewer: Reviewer): string {
+  const { defects_caught: caught, defects_total: total } = reviewer.counts;
+  const said = reviewer.review_failed
+    ? "The AI reviewer gave no usable answer on this change."
+    : reviewer.findings.length > 0
+      ? `The AI reviewer reported ${reviewer.findings.length} ${reviewer.findings.length === 1 ? "problem" : "problems"} in this change.`
+      : "The AI reviewer found no problems in this change.";
+  const tested =
+    total > 0
+      ? ` To see what that is worth, we hid ${total} mistakes of our own in copies of it: the reviewer caught ${caught} and missed ${total - caught}.`
+      : " The reviewer could not be tested on this change.";
+  const spots = reviewer.read_yourself.length;
+  const todo =
+    spots > 0
+      ? ` Check the ${spots} red ${spots === 1 ? "spot" : "spots"} yourself before you sign.`
+      : total > 0
+        ? " It missed nothing we planted, so there is nothing extra to check."
+        : " Treat the change as unreviewed.";
+  return said + tested + todo;
+}
 
 function PullItem({ pull, active, onSelect }: { pull: Pull; active: boolean; onSelect: () => void }) {
   const status = STATUS[pull.status];
@@ -99,9 +121,13 @@ export default function App() {
 
   const marks = useMemo(() => {
     if (!exam || !reviewer || !file) return [];
-    return exam.plants
+    const blind = exam.plants
       .filter((plant) => reviewer.read_yourself.includes(plant.id) && plant.file === file.path)
-      .map((plant) => ({ start: plant.line_start, end: plant.line_end }));
+      .map((plant) => ({ start: plant.line_start, end: plant.line_end, tone: "blind" as const }));
+    const found = reviewer.findings
+      .filter((finding) => file.path.endsWith(finding.file) || finding.file.endsWith(file.path))
+      .map((finding) => ({ start: finding.line_start, end: finding.line_end, tone: "finding" as const }));
+    return [...blind, ...found];
   }, [exam, reviewer, file]);
 
   const jumpTo = (plant: Plant) => {
@@ -214,6 +240,9 @@ export default function App() {
                   )}
                 </div>
                 <h1 className="mt-1 text-[22px] font-extrabold leading-tight tracking-tight">{exam.change.requirement_title}</h1>
+                <p className="mt-2 max-w-4xl rounded-md border-2 border-ink bg-warn-wash px-3 py-2 text-[14px] font-medium leading-snug">
+                  {summarise(reviewer)}
+                </p>
                 <button
                   type="button"
                   onClick={() => setShowRequirement(!showRequirement)}
@@ -258,14 +287,11 @@ export default function App() {
               {file && <DiffView file={file} marks={marks} focus={focus?.line ?? null} key={`${file.path}-${focus?.token ?? 0}`} className="min-h-0 flex-1" />}
 
               <p className="border-t-2 border-ink bg-panel px-5 py-2 text-[12.5px] text-soft">
-                {marks.length > 0 ? (
-                  <>
-                    <span className="mr-1.5 inline-block h-3 w-1.5 translate-y-0.5 bg-missed" />
-                    Marked lines are where {prettyModel(reviewer.name)} failed to notice a defect we planted. Its “no problems” means little there.
-                  </>
-                ) : (
-                  <>Nothing is marked in this file for {prettyModel(reviewer.name)}.</>
-                )}
+                <span className="mr-1.5 inline-block h-3 w-1.5 translate-y-0.5 bg-missed" />
+                <strong>Red is not a known bug.</strong> It is a spot where {prettyModel(reviewer.name)} missed a mistake we planted in a copy, so its
+                “no problems” can’t be trusted there.
+                <span className="ml-4 mr-1.5 inline-block h-3 w-1.5 translate-y-0.5 bg-warn" />
+                Yellow is a problem the reviewer itself reported in the real code.
               </p>
             </section>
 
