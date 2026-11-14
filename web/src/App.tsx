@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ArrowLeft, ArrowUpRight, BotIcon, CheckIcon, ChevronDown, PanelIcon, PullIcon, XIcon } from "./icons";
 import { fetchPulls, fetchReview, postSignOff, prettyModel } from "./lib";
 import { clearSaved, codeFingerprint, storageKey } from "./progress";
-import { Landing, PullGroups, SpotNote, pullKind } from "./Pulls";
+import { Landing, PullGroups, SpotNote, canOpen, stageOf } from "./Pulls";
 import { SpotCheckReveal } from "./SpotCheck";
 import type { Exam, PullList, SignOff, SignResult, SpotVerdict } from "./types";
 import { Workspace } from "./Workspace";
@@ -119,7 +119,7 @@ export default function App() {
   }, [loadPulls]);
 
   // While an AI check is running, ask again now and then, so the pull request opens up once its results are in.
-  const checking = pulls?.pull_requests.some((item) => pullKind(item) === "checking") ?? false;
+  const checking = pulls?.pull_requests.some((item) => stageOf(item) === "checking") ?? false;
   useEffect(() => {
     if (!checking) return;
     const timer = window.setInterval(() => void loadPulls(), POLL_MS);
@@ -149,7 +149,7 @@ export default function App() {
 
   // Only a pull request ready to audit opens. A signed one, one still being checked, or an unknown number leads back to the list.
   useEffect(() => {
-    if (pulls && selected != null && (!pull || pullKind(pull) !== "ready")) go(null, true);
+    if (pulls && selected != null && (!pull || !canOpen(pull))) go(null, true);
   }, [pulls, selected, pull, go]);
 
   const loadReview = useCallback((changeId: string, keepView: boolean) => {

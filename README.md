@@ -66,11 +66,14 @@ A working prototype with two parts.
   sign-off. (A review objective is one of the checkable points the
   requirement, the issue, was split into.) A menu at the top switches
   between pull requests during an audit.
-- After the sign-off the page goes back to the list. The signed pull request
-  moves to the bottom, greyed, with a green, red or amber border for
-  accepted, rejected or sent for a full read, and it cannot be opened again.
-  A pull request whose AI check has no results yet shows a spinner and
-  cannot be opened either.
+- The list has three parts. At the top, the pull requests the AI has
+  checked and a person can audit, and below them any whose AI check is
+  still running (a spinner; they cannot be opened yet). Then what needs
+  follow-up: a rejected pull request goes back to the AI agent to be fixed
+  and checked again, and one sent for a full human read links to GitHub. At
+  the bottom, an archive of the accepted ones, with who signed and when.
+- After the sign-off the page goes back to the list and the signed pull
+  request moves to its part. A signed pull request cannot be opened again.
 - Each objective step states three things in the side bar: what the AI
   reviewer claims, how that claim did on our test, and what the person must
   do. The panel shows the change file by file: the lines the AI reviewer
