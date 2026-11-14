@@ -286,7 +286,9 @@ def build_exam(results_dir: Path, change_id: str, hide_missed: bool = False) -> 
             by_reviewer[run["reviewer"]] = run
 
     change = newest["change"]
-    reviewers = [_reviewer_view(run) for run in sorted(by_reviewer.values(), key=lambda r: r.get("created_at", ""))]
+    # The main reviewer first, then the others in the order they were run.
+    ordered = sorted(by_reviewer.values(), key=lambda r: (not r.get("primary"), r.get("created_at", "")))
+    reviewers = [_reviewer_view(run) for run in ordered]
     missed = {plant_id for reviewer in reviewers for plant_id in reviewer["read_yourself"]}
     missed |= {p["id"] for reviewer in reviewers for p in newest["plants"] if reviewer["results"].get(p["id"]) == "missed"}
     hidden = missed if hide_missed else set()

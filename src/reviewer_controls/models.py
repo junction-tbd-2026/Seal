@@ -127,6 +127,7 @@ class RunReport:
     reviewer: str
     planter: str = ""
     created_at: str = ""
+    primary: bool = False            # the main reviewer under test (REVIEWER in the keys file); the page leads with it
     requirement_points: List[RequirementPoint] = field(default_factory=list)
     plants: List[Plant] = field(default_factory=list)
     original_review: Optional[ReviewResult] = None

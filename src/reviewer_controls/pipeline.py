@@ -287,6 +287,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     # The reviewers are different services, so they are tested at the same time.
     with ThreadPoolExecutor(max_workers=max(1, len(reviewers))) as pool:
         reports = list(pool.map(run_one, reviewers))
+    if reports:
+        reports[0].primary = True   # the first configured reviewer is the main one under test
 
     lines = []
     for report in reports:

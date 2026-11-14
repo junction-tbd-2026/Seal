@@ -1520,5 +1520,6 @@
   "wall_seconds": 270.95626878738403,
   "notes": [
     "The reviewer answered differently on two identical reviews for R4; those points are not scored."
-  ]
+  ],
+  "primary": true
 }
