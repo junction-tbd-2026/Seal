@@ -1,0 +1,440 @@
+{
+  "change": {
+    "id": "ju26-issue-2234",
+    "requirement_id": "2234",
+    "requirement_text": "# Requirement #2234: The analyzer does not work if SuppressSourceGeneration = true\n\nSource: https://github.com/MessagePack-CSharp/MessagePack-CSharp/issues/2234\n\n#### Bug description\n\nThe analyzer does not work if SuppressSourceGeneration = true. This has happened since version 3.1.1. It still worked in 3.1.0.\n",
+    "base_ref": "origin/ju26-issue-2234^",
+    "head_ref": "origin/ju26-issue-2234",
+    "diff": "diff --git a/README.md b/README.md\nindex c52f1088..3d37b675 100644\n--- a/README.md\n+++ b/README.md\n@@ -1617,6 +1617,20 @@ This code generation has a minor upfront performance cost.\n > Note: When using Unity, dynamic code generation only works when targeting .NET Framework 4.x + mono runtime.\n For all other Unity targets, AOT is required.\n \n+### Opting out of source generation\n+\n+A `[MessagePackObject]` type can opt out of source generation with `[MessagePackObject(SuppressSourceGeneration = true)]`.\n+No formatter is generated for that type. It is serialized at run time by the dynamic resolvers, which use reflection, so such a type is not AOT-safe.\n+\n+The analyzer still validates these types, because they are serialized at run time and must still have a valid contract:\n+- Members have a `[Key]` or `[IgnoreMember]` attribute ([MsgPack004](doc/analyzers/MsgPack004.md)).\n+- Keys are unique and all of the same kind ([MsgPack005](doc/analyzers/MsgPack005.md)).\n+- Non-public members require `AllowPrivate` ([MsgPack015](doc/analyzers/MsgPack015.md)).\n+- Members have types that are themselves serializable ([MsgPack003](doc/analyzers/MsgPack003.md)).\n+- Types are accessible to the resolver ([MsgPack012](doc/analyzers/MsgPack012.md)).\n+\n+The analyzer does not report the partial-class requirement ([MsgPack011](doc/analyzers/MsgPack011.md)) or the AOT-only checks ([MsgPack016](doc/analyzers/MsgPack016.md) and [MsgPack017](doc/analyzers/MsgPack017.md)) for these types, because they only apply when a formatter is generated.\n+\n ### Customizations\n \n You can customize the generated source through properties on the `GeneratedMessagePackResolverAttribute`.\ndiff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\nindex e121773d..470c93fc 100644\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1005,6 +1005,7 @@ public class TypeCollector\n                         if ((isIntKey && intKey == null) || (!isIntKey && stringKey == null))\n                         {\n                             this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.DoNotMixStringAndIntKeys, item.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation()));\n+                            continue; // The key kind does not match the other members; the diagnostic is reported, so skip this member.\n                         }\n                     }\n \n@@ -1019,7 +1020,10 @@ public class TypeCollector\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        intMembers.Add(member.IntKey, (member, item.Type));\n+                        if (!intMembers.ContainsKey(member.IntKey))\n+                        {\n+                            intMembers.Add(member.IntKey, (member, item.Type));\n+                        }\n                     }\n                     else if (stringKey is not null)\n                     {\n@@ -1032,7 +1036,10 @@ public class TypeCollector\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        stringMembers.Add(member.StringKey, (member, item.Type));\n+                        if (!stringMembers.ContainsKey(member.StringKey))\n+                        {\n+                            stringMembers.Add(member.StringKey, (member, item.Type));\n+                        }\n                     }\n \n                     var messagePackFormatter = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.FormatterAttribute))?.ConstructorArguments[0];\n@@ -1138,6 +1145,7 @@ public class TypeCollector\n                         if ((isIntKey && intKey == null) || (!isIntKey && stringKey == null))\n                         {\n                             this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.DoNotMixStringAndIntKeys, item.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation()));\n+                            continue; // The key kind does not match the other members; the diagnostic is reported, so skip this member.\n                         }\n                     }\n \n@@ -1152,7 +1160,10 @@ public class TypeCollector\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        intMembers.Add(member.IntKey, (member, item.Type));\n+                        if (!intMembers.ContainsKey(member.IntKey))\n+                        {\n+                            intMembers.Add(member.IntKey, (member, item.Type));\n+                        }\n                     }\n                     else\n                     {\n@@ -1165,7 +1176,10 @@ public class TypeCollector\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        stringMembers.Add(member.StringKey, (member, item.Type));\n+                        if (!stringMembers.ContainsKey(member.StringKey))\n+                        {\n+                            stringMembers.Add(member.StringKey, (member, item.Type));\n+                        }\n                     }\n \n                     var messagePackFormatter = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.FormatterAttribute))?.ConstructorArguments[0];\ndiff --git a/tests/MessagePack.SourceGenerator.ExecutionTests/SuppressedSourceGenerationTests.cs b/tests/MessagePack.SourceGenerator.ExecutionTests/SuppressedSourceGenerationTests.cs\nnew file mode 100644\nindex 00000000..9ba87c4e\n--- /dev/null\n+++ b/tests/MessagePack.SourceGenerator.ExecutionTests/SuppressedSourceGenerationTests.cs\n@@ -0,0 +1,37 @@\n+// Copyright (c) All contributors. All rights reserved.\n+// Licensed under the MIT license. See LICENSE file in the project root for full license information.\n+\n+/// <summary>\n+/// A type that opts out of source generation (https://github.com/MessagePack-CSharp/MessagePack-CSharp/issues/2234).\n+/// It must still serialize correctly through the run-time (dynamic) resolver.\n+/// </summary>\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class SuppressedSourceGenerationType\n+{\n+    [Key(0)]\n+    public int Id { get; set; }\n+\n+    [Key(1)]\n+    public string Name { get; set; } = string.Empty;\n+}\n+\n+public class SuppressedSourceGenerationTests\n+{\n+    [Fact]\n+    public void NoFormatterIsGeneratedForSuppressedType()\n+    {\n+        Assert.Null(GeneratedMessagePackResolver.Instance.GetFormatter<SuppressedSourceGenerationType>());\n+    }\n+\n+    [Fact]\n+    public void SuppressedTypeRoundTripsThroughDynamicResolver()\n+    {\n+        var value = new SuppressedSourceGenerationType { Id = 7, Name = \"seven\" };\n+\n+        byte[] bytes = MessagePackSerializer.Serialize(value, MessagePackSerializerOptions.Standard);\n+        SuppressedSourceGenerationType result = MessagePackSerializer.Deserialize<SuppressedSourceGenerationType>(bytes, MessagePackSerializerOptions.Standard);\n+\n+        Assert.Equal(7, result.Id);\n+        Assert.Equal(\"seven\", result.Name);\n+    }\n+}\ndiff --git a/tests/MessagePack.SourceGenerator.Tests/SuppressSourceGenerationAnalyzerTests.cs b/tests/MessagePack.SourceGenerator.Tests/SuppressSourceGenerationAnalyzerTests.cs\nnew file mode 100644\nindex 00000000..3aa556f9\n--- /dev/null\n+++ b/tests/MessagePack.SourceGenerator.Tests/SuppressSourceGenerationAnalyzerTests.cs\n@@ -0,0 +1,193 @@\n+// Copyright (c) All contributors. All rights reserved.\n+// Licensed under the MIT license. See LICENSE file in the project root for full license information.\n+\n+using MessagePack.Analyzers.CodeFixes;\n+using Microsoft.CodeAnalysis.CSharp;\n+using Microsoft.CodeAnalysis.Testing;\n+using VerifyCS = CSharpCodeFixVerifier<MessagePack.SourceGenerator.Analyzers.MsgPack00xMessagePackAnalyzer, MessagePack.Analyzers.CodeFixes.MessagePackCodeFixProvider>;\n+\n+/// <summary>\n+/// Verifies that the analyzer keeps validating <c>[MessagePackObject(SuppressSourceGeneration = true)]</c> types\n+/// (https://github.com/MessagePack-CSharp/MessagePack-CSharp/issues/2234).\n+/// Opting out of source generation only skips generation; the type is still serialized at run time, so its contract must still be checked.\n+/// </summary>\n+public class SuppressSourceGenerationAnalyzerTests\n+{\n+    private const string Preamble = @\"\n+using MessagePack;\n+\";\n+\n+    [Fact]\n+    public async Task MemberWithoutKeyIsReported()\n+    {\n+        string input = Preamble + @\"\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    public string {|MsgPack004:Member|} { get; set; }\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task AllowPrivateRequiredIsReported()\n+    {\n+        string input = Preamble + @\"\n+[{|MsgPack015:MessagePackObject(SuppressSourceGeneration = true)|}]\n+public class Foo\n+{\n+    [Key(0)]\n+    private string member;\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task MemberTypeMustBeMessagePackObjectIsReported()\n+    {\n+        string input = Preamble + @\"\n+public class Other\n+{\n+}\n+\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    [Key(0)]\n+    public Other {|MsgPack003:Member|} { get; set; }\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task DuplicateIntKeysAreReportedWithoutAnalyzerFailure()\n+    {\n+        string input = Preamble + @\"\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    [Key(0)]\n+    public string Member1 { get; set; }\n+\n+    {|MsgPack005:[Key(0)]\n+    public string Member2 { get; set; }|}\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task DuplicateStringKeysAreReportedWithoutAnalyzerFailure()\n+    {\n+        string input = Preamble + @\"\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    [Key(\"\"a\"\")]\n+    public string Member1 { get; set; }\n+\n+    {|MsgPack005:[Key(\"\"a\"\")]\n+    public string Member2 { get; set; }|}\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task MixedKeyKindsAreReportedWithoutAnalyzerFailure()\n+    {\n+        string input = Preamble + @\"\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    [Key(0)]\n+    public string Member1 { get; set; }\n+\n+    {|MsgPack005:[Key(\"\"Member2\"\")]\n+    public string Member2 { get; set; }|}\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task DuplicateKeysAreReportedWithoutAnalyzerFailureForGeneratedTypes()\n+    {\n+        string input = Preamble + @\"\n+[MessagePackObject]\n+public class Foo\n+{\n+    [Key(0)]\n+    public string Member1 { get; set; }\n+\n+    {|MsgPack005:[Key(0)]\n+    public string Member2 { get; set; }|}\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task SourceGenerationOnlyDiagnosticsAreNotReportedWhenSuppressed()\n+    {\n+        // The partial-class requirement (MsgPack011) and the AOT-only checks (MsgPack016, MsgPack017)\n+        // only matter when a formatter is generated, so they are not reported for a suppressed type.\n+        string input = Preamble + @\"\n+[MessagePackObject(AllowPrivate = true, SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    [Key(0)]\n+    private string member;\n+\n+    [Key(1)]\n+    public string Prop1 { get; init; } = \"\"some default\"\";\n+\n+    [Key(2)]\n+    public string Prop2 { get; set; }\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+        }.RunAsync();\n+    }\n+}\n"
+  },
+  "reviewer": "google/gemma-4-31B-it",
+  "planter": "deepseek-ai/DeepSeek-V4.1-Flash",
+  "created_at": "2026-11-14T04:15:39Z",
+  "plants": [
+    {
+      "id": "p01",
+      "kind": "bug",
+      "description": "Replacing the per-member 'continue' with 'break' terminates the whole property loop, so every property after the first key-kind mismatch is silently dropped from the collected member list.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1008,
+      "line_end": 1008,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1005,7 +1005,7 @@\n                         if ((isIntKey && intKey == null) || (!isIntKey && stringKey == null))\n                         {\n                             this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.DoNotMixStringAndIntKeys, item.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation()));\n-                            continue; // The key kind does not match the other members; the diagnostic is reported, so skip this member.\n+                              break; // The key kind does not match the other members; the diagnostic is reported, so skip this member.\n                         }\n                     }\n \n",
+      "difficulty": "easy",
+      "proven": null
+    },
+    {
+      "id": "p02",
+      "kind": "bug",
+      "description": "The ContainsKey guard is inverted: when the int key is already present the dictionary Add throws ArgumentException, and when it is absent the member is never registered at all.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1023,
+      "line_end": 1026,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1020,10 +1020,10 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!intMembers.ContainsKey(member.IntKey))\n-                        {\n-                            intMembers.Add(member.IntKey, (member, item.Type));\n-                        }\n+                          if (intMembers.ContainsKey(member.IntKey))\n+                          {\n+                              intMembers.Add(member.IntKey, (member, item.Type));\n+                          }\n                     }\n                     else if (stringKey is not null)\n                     {\n",
+      "difficulty": "medium",
+      "proven": null
+    },
+    {
+      "id": "p03",
+      "kind": "bug",
+      "description": "The duplicate check for string-keyed properties now consults the int-key dictionary, so duplicate string keys are no longer detected and the subsequent Add throws ArgumentException.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1039,
+      "line_end": 1042,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1036,10 +1036,10 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!stringMembers.ContainsKey(member.StringKey))\n-                        {\n-                            stringMembers.Add(member.StringKey, (member, item.Type));\n-                        }\n+                          if (!intMembers.ContainsKey(member.IntKey))\n+                          {\n+                              stringMembers.Add(member.StringKey, (member, item.Type));\n+                          }\n                     }\n \n                     var messagePackFormatter = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.FormatterAttribute))?.ConstructorArguments[0];\n",
+      "difficulty": "medium",
+      "proven": null
+    },
+    {
+      "id": "p04",
+      "kind": "bug",
+      "description": "For an int-keyed field, member.StringKey is null, so the guard calls stringMembers.ContainsKey(null) which throws ArgumentNullException and aborts analysis of the type.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1163,
+      "line_end": 1166,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1160,10 +1160,10 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!intMembers.ContainsKey(member.IntKey))\n-                        {\n-                            intMembers.Add(member.IntKey, (member, item.Type));\n-                        }\n+                          if (!stringMembers.ContainsKey(member.StringKey))\n+                          {\n+                              intMembers.Add(member.IntKey, (member, item.Type));\n+                          }\n                     }\n                     else\n                     {\n",
+      "difficulty": "hard",
+      "proven": null
+    },
+    {
+      "id": "p05",
+      "kind": "omission",
+      "description": "Removes the registration of int-keyed properties into intMembers, so the analyzer no longer has the member/key mapping it needs and produces incomplete results.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1023,
+      "line_end": 1023,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1020,10 +1020,6 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!intMembers.ContainsKey(member.IntKey))\n-                        {\n-                            intMembers.Add(member.IntKey, (member, item.Type));\n-                        }\n                     }\n                     else if (stringKey is not null)\n                     {\n",
+      "difficulty": "easy",
+      "proven": null
+    },
+    {
+      "id": "p06",
+      "kind": "omission",
+      "description": "Removes the registration of string-keyed properties into stringMembers, so those members are missing from the analyzer's collected member set.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1039,
+      "line_end": 1039,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1036,10 +1036,6 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!stringMembers.ContainsKey(member.StringKey))\n-                        {\n-                            stringMembers.Add(member.StringKey, (member, item.Type));\n-                        }\n                     }\n \n                     var messagePackFormatter = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.FormatterAttribute))?.ConstructorArguments[0];\n",
+      "difficulty": "easy",
+      "proven": null
+    },
+    {
+      "id": "p07",
+      "kind": "omission",
+      "description": "Removes the registration of int-keyed fields into intMembers, so the analyzer no longer resolves the key mapping for those fields.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1163,
+      "line_end": 1163,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1160,10 +1160,6 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!intMembers.ContainsKey(member.IntKey))\n-                        {\n-                            intMembers.Add(member.IntKey, (member, item.Type));\n-                        }\n                     }\n                     else\n                     {\n",
+      "difficulty": "easy",
+      "proven": null
+    },
+    {
+      "id": "p08",
+      "kind": "omission",
+      "description": "Removes the registration of string-keyed fields into stringMembers, leaving those members out of the collected member set the analyzer relies on.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1179,
+      "line_end": 1179,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1176,10 +1176,6 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!stringMembers.ContainsKey(member.StringKey))\n-                        {\n-                            stringMembers.Add(member.StringKey, (member, item.Type));\n-                        }\n                     }\n \n                     var messagePackFormatter = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.FormatterAttribute))?.ConstructorArguments[0];\n",
+      "difficulty": "easy",
+      "proven": null
+    },
+    {
+      "id": "p09",
+      "kind": "harmless",
+      "description": "Uses the indexer instead of Add; with the ContainsKey guard in place the behaviour is identical.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1023,
+      "line_end": 1026,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1020,10 +1020,10 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!intMembers.ContainsKey(member.IntKey))\n-                        {\n-                            intMembers.Add(member.IntKey, (member, item.Type));\n-                        }\n+                          if (!intMembers.ContainsKey(member.IntKey))\n+                          {\n+                              intMembers[member.IntKey] = (member, item.Type);\n+                          }\n                     }\n                     else if (stringKey is not null)\n                     {\n",
+      "difficulty": "easy",
+      "proven": null
+    },
+    {
+      "id": "p10",
+      "kind": "harmless",
+      "description": "Uses the indexer instead of Add; with the ContainsKey guard in place the behaviour is identical.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1039,
+      "line_end": 1042,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1036,10 +1036,10 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!stringMembers.ContainsKey(member.StringKey))\n-                        {\n-                            stringMembers.Add(member.StringKey, (member, item.Type));\n-                        }\n+                          if (!stringMembers.ContainsKey(member.StringKey))\n+                          {\n+                              stringMembers[member.StringKey] = (member, item.Type);\n+                          }\n                     }\n \n                     var messagePackFormatter = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.FormatterAttribute))?.ConstructorArguments[0];\n",
+      "difficulty": "easy",
+      "proven": null
+    },
+    {
+      "id": "p11",
+      "kind": "harmless",
+      "description": "Passes the same arguments by name; the call is unchanged.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1163,
+      "line_end": 1166,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1160,10 +1160,10 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!intMembers.ContainsKey(member.IntKey))\n-                        {\n-                            intMembers.Add(member.IntKey, (member, item.Type));\n-                        }\n+                          if (!intMembers.ContainsKey(member.IntKey))\n+                          {\n+                              intMembers.Add(key: member.IntKey, value: (member, item.Type));\n+                          }\n                     }\n                     else\n                     {\n",
+      "difficulty": "easy",
+      "proven": null
+    },
+    {
+      "id": "p12",
+      "kind": "harmless",
+      "description": "Compares the ContainsKey result against false instead of negating it; logically identical.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1179,
+      "line_end": 1182,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1176,10 +1176,10 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!stringMembers.ContainsKey(member.StringKey))\n-                        {\n-                            stringMembers.Add(member.StringKey, (member, item.Type));\n-                        }\n+                          if (stringMembers.ContainsKey(member.StringKey) == false)\n+                          {\n+                              stringMembers.Add(member.StringKey, (member, item.Type));\n+                          }\n                     }\n \n                     var messagePackFormatter = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.FormatterAttribute))?.ConstructorArguments[0];\n",
+      "difficulty": "easy",
+      "proven": null
+    }
+  ],
+  "original_review": {
+    "reviewer": "google/gemma-4-31B-it",
+    "variant_id": "original",
+    "findings": [],
+    "meets_requirement": null,
+    "refused_to_decide": [
+      "The provided diff shows the documentation, tests, and some bug fixes in TypeCollector.cs (handling duplicate keys and mixed key kinds), but it does not show the actual logic change that fixes the reported bug: 'The analyzer does not work if SuppressSourceGeneration = true'. I cannot see where the analyzer's entry point or filtering logic was modified to ensure it continues to process types that have SuppressSourceGeneration set to true."
+    ],
+    "prompt_tokens": 4669,
+    "completion_tokens": 130,
+    "seconds": 15.60798692703247,
+    "error": ""
+  },
+  "variant_reviews": [
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p01",
+      "findings": [],
+      "meets_requirement": true,
+      "refused_to_decide": [],
+      "prompt_tokens": 4669,
+      "completion_tokens": 36,
+      "seconds": 5.056065082550049,
+      "error": ""
+    },
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p02",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1023,
+          "line_end": 1027,
+          "message": "Logic error in duplicate key detection: the code checks if the key exists in the dictionary and ONLY adds it if it DOES exist (`if (intMembers.ContainsKey(member.IntKey))`). This prevents new keys from being added and fails to detect duplicates, effectively breaking the analyzer's ability to collect members.",
+          "severity": "critical"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [],
+      "prompt_tokens": 4669,
+      "completion_tokens": 170,
+      "seconds": 14.977618217468262,
+      "error": ""
+    },
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p03",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1039,
+          "line_end": 1042,
+          "message": "Logic error in duplicate key check: the code checks if 'intMembers' contains the key before adding to 'stringMembers'. This will cause string keys to be incorrectly skipped or added based on the state of the integer key collection, likely failing to detect duplicate string keys or incorrectly allowing them.",
+          "severity": "critical"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [],
+      "prompt_tokens": 4669,
+      "completion_tokens": 165,
+      "seconds": 19.44464683532715,
+      "error": ""
+    },
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p04",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1163,
+          "line_end": 1166,
+          "message": "Logic error in duplicate key check: the code checks if 'stringMembers' contains the key before adding to 'intMembers'. This will allow duplicate integer keys to be added to 'intMembers' as long as no string key with the same value exists, and it fails to correctly prevent duplicates in the integer key set.",
+          "severity": "critical"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [],
+      "prompt_tokens": 4669,
+      "completion_tokens": 171,
+      "seconds": 10.128724098205566,
+      "error": ""
+    },
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p05",
+      "findings": [],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "The provided diff shows changes to the README, the addition of tests, and some logic changes in TypeCollector.cs to prevent crashes/duplicates when reporting diagnostics. However, the actual logic that checks for the 'SuppressSourceGeneration' property on the [MessagePackObject] attribute to decide whether to skip source generation (while still running the analyzer) is not present in the provided code snippets. I cannot verify if the analyzer now correctly handles 'SuppressSourceGeneration = true' without seeing the logic that reads this attribute property."
+      ],
+      "prompt_tokens": 4606,
+      "completion_tokens": 146,
+      "seconds": 13.40786623954773,
+      "error": ""
+    },
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p06",
+      "findings": [],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "The provided diff shows the documentation, tests, and some bug fixes in TypeCollector.cs (handling duplicate keys and mixed key kinds), but it does not show the actual logic change that enables the analyzer to run when SuppressSourceGeneration = true. I cannot verify if the analyzer's entry point or filtering logic was updated to include types with SuppressSourceGeneration = true."
+      ],
+      "prompt_tokens": 4606,
+      "completion_tokens": 118,
+      "seconds": 12.6177818775177,
+      "error": ""
+    },
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p07",
+      "findings": [],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "The provided code changes show the addition of documentation and tests, and some bug fixes in TypeCollector.cs related to duplicate keys and mixed key kinds. However, the actual logic that checks for 'SuppressSourceGeneration = true' and decides whether to run the analyzer or skip source generation is not present in the provided diff. I cannot verify if the analyzer now correctly processes types with SuppressSourceGeneration = true because the core logic change is missing from the snippet."
+      ],
+      "prompt_tokens": 4606,
+      "completion_tokens": 134,
+      "seconds": 5.4438910484313965,
+      "error": ""
+    },
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p08",
+      "findings": [],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "The provided diff shows the addition of documentation and tests, and some bug fixes in TypeCollector.cs (handling duplicate keys and mixed key kinds), but it does not show the actual logic change that fixes the reported bug: 'The analyzer does not work if SuppressSourceGeneration = true'. I cannot see where the analyzer's entry point or filtering logic was modified to ensure it continues to process types that have SuppressSourceGeneration set to true."
+      ],
+      "prompt_tokens": 4606,
+      "completion_tokens": 132,
+      "seconds": 18.71504282951355,
+      "error": ""
+    },
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p09",
+      "findings": [],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "The provided changes include documentation, tests, and bug fixes for dictionary collisions in the TypeCollector, but the actual logic that implements the 'SuppressSourceGeneration' check (the code that tells the Source Generator to skip generating the formatter while allowing the analyzer to continue) is missing from the diff. I cannot verify if the requirement is met without seeing the changes to the Source Generator's emission logic."
+      ],
+      "prompt_tokens": 4668,
+      "completion_tokens": 121,
+      "seconds": 12.23310899734497,
+      "error": ""
+    },
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p10",
+      "findings": [],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "The provided changes include documentation, tests, and some bug fixes in TypeCollector.cs (handling duplicate keys and mixed key kinds), but the actual logic that implements the 'SuppressSourceGeneration' check in the analyzer/generator is missing from the diff. I cannot verify if the analyzer now correctly identifies and processes types with SuppressSourceGeneration = true because the code that reads this attribute and decides whether to skip source generation (while still running the analyzer) is not shown."
+      ],
+      "prompt_tokens": 4668,
+      "completion_tokens": 136,
+      "seconds": 12.497802972793579,
+      "error": ""
+    },
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p11",
+      "findings": [],
+      "meets_requirement": true,
+      "refused_to_decide": [],
+      "prompt_tokens": 4673,
+      "completion_tokens": 36,
+      "seconds": 3.5175628662109375,
+      "error": ""
+    },
+    {
+      "reviewer": "google/gemma-4-31B-it",
+      "variant_id": "p12",
+      "findings": [],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "The provided diff does not show the actual logic change that fixes the bug. The requirement states that the analyzer does not work when 'SuppressSourceGeneration = true', but the changes in 'TypeCollector.cs' are related to preventing crashes/duplicate keys (adding 'ContainsKey' checks and 'continue' statements) rather than logic that explicitly enables the analyzer for suppressed types. I cannot see where the analyzer's entry point or filtering logic was modified to stop ignoring types with 'SuppressSourceGeneration = true'."
+      ],
+      "prompt_tokens": 4672,
+      "completion_tokens": 143,
+      "seconds": 15.740433931350708,
+      "error": ""
+    }
+  ],
+  "outcomes": [
+    {
+      "plant_id": "p01",
+      "kind": "bug",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": false,
+      "correct": false,
+      "inconclusive": false
+    },
+    {
+      "plant_id": "p02",
+      "kind": "bug",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": false
+    },
+    {
+      "plant_id": "p03",
+      "kind": "bug",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": false
+    },
+    {
+      "plant_id": "p04",
+      "kind": "bug",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": false
+    },
+    {
+      "plant_id": "p05",
+      "kind": "omission",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": false,
+      "correct": false,
+      "inconclusive": false
+    },
+    {
+      "plant_id": "p06",
+      "kind": "omission",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": false,
+      "correct": false,
+      "inconclusive": false
+    },
+    {
+      "plant_id": "p07",
+      "kind": "omission",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": false,
+      "correct": false,
+      "inconclusive": false
+    },
+    {
+      "plant_id": "p08",
+      "kind": "omission",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": false,
+      "correct": false,
+      "inconclusive": false
+    },
+    {
+      "plant_id": "p09",
+      "kind": "harmless",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": false,
+      "correct": true,
+      "inconclusive": false
+    },
+    {
+      "plant_id": "p10",
+      "kind": "harmless",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": false,
+      "correct": true,
+      "inconclusive": false
+    },
+    {
+      "plant_id": "p11",
+      "kind": "harmless",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": false,
+      "correct": true,
+      "inconclusive": false
+    },
+    {
+      "plant_id": "p12",
+      "kind": "harmless",
+      "reviewer": "google/gemma-4-31B-it",
+      "flagged": false,
+      "correct": true,
+      "inconclusive": false
+    }
+  ],
+  "altered_requirement": "",
+  "altered_requirement_review": null,
+  "requirement_flip_changed_verdict": null,
+  "build_checked": false,
+  "prompt_tokens": 60450,
+  "completion_tokens": 1638,
+  "wall_seconds": 159.40975093841553,
+  "notes": [
+    "Altered-requirement check skipped: the reviewer did not say the real change meets the requirement."
+  ]
+}
