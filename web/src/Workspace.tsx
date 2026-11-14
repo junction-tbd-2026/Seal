@@ -2,8 +2,9 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Brief, Dots, type BriefNode, type BriefTask } from "./Brief";
-import { Changes, layoutChanges, type Cite, type Lens } from "./Changes";
-import { ArrowLeft, ArrowRight, ArrowUpRight, CheckIcon, SkipIcon, XIcon } from "./icons";
+import { ChangeDrawer, Changes, blockMarks, layoutChanges, type Cite, type Lens } from "./Changes";
+import type { Mark } from "./DiffView";
+import { ArrowLeft, ArrowRight, ArrowUpRight, CheckIcon, PanelIcon, SkipIcon, XIcon } from "./icons";
 import { fileName, lineRange, objectiveName, plural, prettyModel, sameFile, shortModel } from "./lib";
 import { Prose, inline } from "./Prose";
 import {
@@ -27,7 +28,7 @@ import {
 import { ReviewerTest } from "./ReviewerTest";
 import { SignOffStep } from "./SignOff";
 import { StepBar } from "./StepBar";
-import type { Exam, Plant, Reviewer, SignOff, SpotVerdict } from "./types";
+import type { Exam, FileDiff, Plant, Reviewer, SignOff, SpotVerdict } from "./types";
 
 const TONE_TEXT: Record<Tone, string> = { verified: "text-caught", unproven: "text-soft", risk: "text-missed" };
 
@@ -205,6 +206,7 @@ export function Workspace({
   const [stale, setStale] = useState(opened.stale);
   const [jump, setJump] = useState<{ id: string; token: number } | null>(null);
   const [showRequirement, setShowRequirement] = useState(false);
+  const [full, setFull] = useState<{ path: string; line: number | null } | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
   const model = shortModel(reviewer.name);
@@ -303,6 +305,34 @@ export function Workspace({
   };
 
   const closeRequirement = useCallback(() => setShowRequirement(false), []);
+  const closeFull = useCallback(() => setFull(null), []);
+  const openFile = useCallback((path: string, line: number | null) => setFull({ path, line }), []);
+
+  // The full change marks every blind spot and every reported problem of the review, and the lines cited in this step.
+  const marksFor = useCallback(
+    (file: FileDiff): Mark[] => [
+      ...exam.plants
+        .filter((plant) => reviewer.read_yourself.includes(plant.id) && sameFile(file.path, plant.file))
+        .map((plant) => ({ start: plant.line_start, end: plant.line_end, tone: "blind" as const })),
+      ...reviewer.findings
+        .filter((finding) => sameFile(file.path, finding.file))
+        .map((finding) => ({ start: finding.line_start, end: finding.line_end, tone: "finding" as const })),
+      ...(lens?.cites ?? [])
+        .filter((cite) => sameFile(file.path, cite.file))
+        .map((cite) => ({ start: cite.start, end: cite.end, tone: cite.outcome === "held" ? ("held" as const) : ("cited" as const) })),
+    ],
+    [exam, reviewer, lens],
+  );
+  const fullFiles = layout ? layout.files.map((item) => item.file) : exam.change.files;
+  // Open the full change where the review needs a reader most: the first blind spot, else the first file.
+  const firstBlind = exam.plants.find((plant) => reviewer.read_yourself.includes(plant.id));
+  const fullStart = (): { path: string; line: number | null } => {
+    const first = layout?.marked ? layout.files[0] : undefined;
+    const starts = first ? first.blocks.flatMap(blockMarks).map((mark) => mark.start) : [];
+    if (first && starts.length > 0) return { path: first.file.path, line: Math.min(...starts) };
+    if (firstBlind) return { path: firstBlind.file, line: firstBlind.line_start };
+    return { path: fullFiles[0]?.path ?? "", line: null };
+  };
 
   // ---- The audit brief in the side bar ----
   const counts = reviewer.counts;
@@ -555,6 +585,15 @@ export function Workspace({
                   Read the requirement (issue {exam.change.requirement_id})
                   <ArrowUpRight size={14} />
                 </button>
+                <span aria-hidden="true">·</span>
+                <button
+                  type="button"
+                  onClick={() => setFull(fullStart())}
+                  className="inline-flex items-center gap-1 text-link hover:underline"
+                >
+                  See the full change
+                  <PanelIcon size={14} />
+                </button>
               </p>
               <h1 className="mt-2 max-w-[60rem] text-[18px] font-semibold leading-[1.3] tracking-[-0.01em] sm:text-[22px]">{title}</h1>
               {step.kind !== "point" && <p className="mt-2 max-w-[46rem] text-[14px] leading-relaxed text-soft">{stepTask(step, exam, reviewer)}</p>}
@@ -589,6 +628,7 @@ export function Workspace({
                     onSpot={onSpot}
                     onFinding={onFinding}
                     jump={jump}
+                    onOpenFile={openFile}
                   />
                 )
               )}
@@ -641,6 +681,19 @@ export function Workspace({
       )}
 
       <AnimatePresence>{showRequirement && <RequirementSheet key="requirement" exam={exam} onClose={closeRequirement} />}</AnimatePresence>
+      <AnimatePresence>
+        {full && (
+          <ChangeDrawer
+            key="full"
+            files={fullFiles}
+            marksFor={marksFor}
+            start={full}
+            model={model}
+            objective={step.kind === "point" ? objectiveName(step.point.id) : null}
+            onClose={closeFull}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

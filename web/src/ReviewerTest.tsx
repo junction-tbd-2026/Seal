@@ -107,11 +107,11 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
               "Could not be tested"
             )}
           </p>
-          {counts.harmless_total > 0 && (
-            <p className="mt-0.5 text-[13.5px] text-soft">
-              {counts.false_alarms === 0 ? "No false alarm" : plural(counts.false_alarms, "false alarm")} on {plural(counts.harmless_total, "harmless edit")}.
-            </p>
-          )}
+          <p className="mt-0.5 text-[13.5px] text-soft">
+            {counts.harmless_total > 0
+              ? `${counts.false_alarms === 0 ? "No false alarm" : plural(counts.false_alarms, "false alarm")} on ${plural(counts.harmless_total, "harmless edit")}.`
+              : "False alarms were not measured."}
+          </p>
           <div className="mt-4 flex flex-wrap gap-2" role="list" aria-label="Planted edits">
             {exam.plants.map((plant, index) => {
               const result = reviewer.results[plant.id];

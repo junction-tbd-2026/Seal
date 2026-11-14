@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { BotIcon, CheckIcon, ChevronDown, PanelIcon, PullIcon, RepoIcon, XIcon } from "./icons";
+import { ArrowUpRight, BotIcon, CheckIcon, ChevronDown, PanelIcon, PullIcon, RepoIcon, XIcon } from "./icons";
 import { fetchPulls, fetchReview, postSignOff, prettyModel } from "./lib";
 import { clearSaved, codeFingerprint, readSaved, storageKey } from "./progress";
 import { SpotCheckReveal } from "./SpotCheck";
@@ -328,6 +328,18 @@ export default function App() {
                 </>
               )}
             </Dropdown>
+          )}
+          {pull?.url && (
+            <a
+              href={pull.url}
+              target="_blank"
+              rel="noreferrer"
+              title={`Open pull request #${pull.number} on GitHub`}
+              aria-label={`Open pull request #${pull.number} on GitHub`}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint hover:bg-subtle hover:text-ink"
+            >
+              <ArrowUpRight size={16} />
+            </a>
           )}
         </div>
         {exam && reviewer && pull?.status !== "untested" && (

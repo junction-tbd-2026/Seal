@@ -64,19 +64,20 @@ A working prototype with two parts.
   steps: first how the AI reviewer did on our test, then one step per
   review objective, then the sign-off. (A review objective is one of the
   checkable points the requirement, the issue, was split into.)
-- Each objective step states three things: what the AI reviewer claims,
-  how that claim did on our test, and what the person must do. Below it is
-  the code the AI reviewer cites as evidence, every reference already open.
-  One click shows the same lines in the full change.
+- Each objective step states three things in the side bar: what the AI
+  reviewer claims, how that claim did on our test, and what the person must
+  do. The panel shows the change file by file: the lines the AI reviewer
+  cites as evidence and the blind spots open as cards, every other changed
+  line folded to one row. One click shows the same lines in the full change.
 - The person rules on one explicit question per objective: does the cited
   code prove that the change meets the objective? Where the AI reviewer
   missed a planted mistake, the person first judges the real code at that
-  line ("is correct" or "is wrong").
-- The page shows one task at a time. Finishing a step opens the next one,
-  and background detail stays folded until asked for. A progress indicator
-  above the question shows every step and opens any of them, next to a
-  switch between the review and the full change. The list of pull requests
-  is a narrow rail that opens on hover.
+  line ("looks right" or "looks wrong").
+- The page shows one task at a time. The question of the step floats at
+  the bottom (the Y and N keys answer it), and finishing a step opens the
+  next one. Background detail stays folded until asked for. A step bar at
+  the top shows every step and opens any of them. The pull requests are
+  listed in the side bar and in a menu at the top.
 - The checks are saved in the browser, so an audit can be paused and
   continued later. They are thrown away if the code shown changes.
 - A sign-off with the person's name. Accept unlocks only when every step is

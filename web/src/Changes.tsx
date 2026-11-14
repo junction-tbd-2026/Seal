@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { DiffView, type Mark } from "./DiffView";
 import { BotIcon, CheckIcon, ChevronDown, ChevronsUpDown, FileIcon, FilesIcon, FlaskIcon, PanelIcon, UserIcon, XIcon } from "./icons";
 import { fileName, lineRange, plural, sameFile, symbolOf } from "./lib";
@@ -224,6 +224,7 @@ function plantedVerb(plants: Plant[]): string {
 /** A changed run that holds something to read: the code, then what the AI reviewer and our test say, then the question. */
 function BlockCard({
   block,
+  onOpenFile,
   lens,
   spots,
   findingAnswers,
@@ -232,6 +233,7 @@ function BlockCard({
   flash,
 }: {
   block: Block;
+  onOpenFile: (path: string, line: number | null) => void;
   lens: Lens;
   spots: Record<string, SpotVerdict>;
   findingAnswers: Record<string, FindingAnswer>;
@@ -270,7 +272,14 @@ function BlockCard({
           tint === "missed" ? "bg-missed-wash" : tint === "warn" ? "bg-warn-wash" : ""
         }`}
       >
-        <span className="text-[14px] font-medium">{hunk.start ? `Lines ${lineRange(hunk.start, hunk.end)}` : "Removed lines"}</span>
+        <button
+          type="button"
+          onClick={() => onOpenFile(hunk.file.path, hunk.start || null)}
+          title={`Show these lines in the full ${fileName(hunk.file.path)}`}
+          className="text-[14px] font-medium underline-offset-2 hover:text-link hover:underline"
+        >
+          {hunk.start ? `Lines ${lineRange(hunk.start, hunk.end)}` : "Removed lines"}
+        </button>
         {symbol && <span className="min-w-0 truncate font-mono text-[12.5px] text-faint">{symbol}</span>}
         <span className="ml-auto flex flex-wrap items-center gap-2">
           {block.blind.length > 0 &&
@@ -492,18 +501,57 @@ function FileHeader({ layout, onOpen }: { layout: FileLayout; onOpen: () => void
   );
 }
 
-/** Every change in one file, beside the page. */
-function FileDrawer({ file, marks, line, onClose }: { file: FileDiff; marks: Mark[]; line: number | null; onClose: () => void }) {
+/** What the colours in the code mean, for a view that has no cards to say it. */
+export function Legend({ model, objective }: { model: string; objective: string | null }) {
+  const key = (style: string, text: string) => (
+    <span className="inline-flex items-center gap-1.5">
+      <i className={`inline-block h-3.5 w-[3px] rounded-full ${style}`} aria-hidden="true" />
+      {text}
+    </span>
+  );
+  return (
+    <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-soft">
+      {key("bg-missed", "blind spot, check yourself")}
+      {key("bg-warn", `reported by ${model}`)}
+      {objective && key("bg-ai", `cited by ${model} for ${objective}`)}
+    </p>
+  );
+}
+
+/**
+ * The full change beside the page, one file at a time: every blind spot and every reported
+ * problem of the review marked, and the lines cited in the step on screen.
+ */
+export function ChangeDrawer({
+  files,
+  marksFor,
+  start,
+  model,
+  objective,
+  onClose,
+}: {
+  files: FileDiff[];
+  marksFor: (file: FileDiff) => Mark[];
+  /** The file and line to open at. */
+  start: { path: string; line: number | null };
+  model: string;
+  objective: string | null;
+  onClose: () => void;
+}) {
   const reduced = useReducedMotion() ?? false;
   const close = useRef<HTMLButtonElement>(null);
+  const [at, setAt] = useState(start);
+  const file = findFile(files, at.path) ?? files[0];
+  const marks = useMemo(() => (file ? marksFor(file) : []), [file, marksFor]);
   useEffect(() => {
     close.current?.focus();
     const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  if (!file) return null;
   return (
-    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={`Every change in ${file.path}`}>
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="The full change">
       <motion.div
         className="absolute inset-0 bg-ink/20"
         initial={{ opacity: 0 }}
@@ -517,21 +565,50 @@ function FileDrawer({ file, marks, line, onClose }: { file: FileDiff; marks: Mar
         animate={reduced ? { opacity: 1 } : { x: 0 }}
         exit={reduced ? { opacity: 0 } : { x: "100%" }}
         transition={{ type: "spring", stiffness: 380, damping: 38 }}
-        className="absolute inset-y-2 right-2 flex w-[min(56rem,calc(100vw-1rem))] flex-col overflow-hidden rounded-2xl border border-hair bg-panel shadow-[var(--shadow-pop)]"
+        className="absolute inset-y-2 right-2 flex w-[min(60rem,calc(100vw-1rem))] flex-col overflow-hidden rounded-2xl border border-hair bg-panel shadow-[var(--shadow-pop)]"
       >
-        <header className="flex items-center gap-3 border-b border-hair px-5 py-3">
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-hair text-soft">
-            <FileIcon size={16} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[15px] font-semibold">{fileName(file.path)}</p>
-            <p className="truncate font-mono text-[12px] text-faint">{file.path}</p>
+        <header className="space-y-3 border-b border-hair px-5 pb-3 pt-3">
+          <div className="flex items-center gap-3">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-hair text-soft">
+              <FileIcon size={16} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[15px] font-semibold">{fileName(file.path)}</p>
+              <p className="truncate font-mono text-[12px] text-faint">
+                {file.path} <span className="font-sans text-caught">+{file.added}</span> <span className="font-sans text-missed">−{file.removed}</span>
+              </p>
+            </div>
+            <button ref={close} type="button" onClick={onClose} className="btn h-8 w-8 shrink-0 !p-0" aria-label="Close">
+              <XIcon size={16} />
+            </button>
           </div>
-          <button ref={close} type="button" onClick={onClose} className="btn h-8 w-8 !p-0" aria-label="Close">
-            <XIcon size={16} />
-          </button>
+          {files.length > 1 && (
+            <div className="no-scrollbar flex gap-1 overflow-x-auto rounded-xl bg-canvas p-1" role="tablist" aria-label="Files in the change">
+              {files.map((item) => {
+                const active = item.path === file.path;
+                const blind = marksFor(item).filter((mark) => mark.tone === "blind").length;
+                return (
+                  <button
+                    key={item.path}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    title={item.path}
+                    onClick={() => setAt({ path: item.path, line: null })}
+                    className={`flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2.5 font-mono text-[12px] ${
+                      active ? "bg-panel text-ink shadow-[0_1px_2px_rgb(0_0_0/0.06)]" : "text-soft hover:text-ink"
+                    }`}
+                  >
+                    {fileName(item.path)}
+                    {blind > 0 && <span className="grid h-[18px] min-w-[18px] place-items-center rounded-md bg-missed-wash px-1 font-sans text-[11px] text-missed">{blind}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <Legend model={model} objective={objective} />
         </header>
-        <DiffView file={file} marks={marks} focus={line} className="min-h-0 flex-1 py-2" />
+        <DiffView key={file.path} file={file} marks={marks} focus={at.line} className="min-h-0 flex-1 py-2" />
       </motion.aside>
     </div>
   );
@@ -549,6 +626,7 @@ export function Changes({
   onSpot,
   onFinding,
   jump,
+  onOpenFile,
 }: {
   layout: Layout;
   lens: Lens;
@@ -558,32 +636,40 @@ export function Changes({
   onFinding: (index: string, answer: FindingAnswer) => void;
   /** An element to bring into view, by id; the token makes the same id jump again. */
   jump: { id: string; token: number } | null;
+  /** Shows a file of the full change beside the page, at a line. */
+  onOpenFile: (path: string, line: number | null) => void;
 }) {
   const reduced = useReducedMotion() ?? false;
   const [tab, setTab] = useState<string>("all");
-  const [drawer, setDrawer] = useState<{ path: string; line: number | null } | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
-  const closeDrawer = useCallback(() => setDrawer(null), []);
+  const tabNow = useRef(tab);
+  tabNow.current = tab;
 
   useEffect(() => {
     if (!jump) return;
+    // From a single file, the other files fade in first: wait until the target is on the page and still.
+    const switching = tabNow.current !== "all";
     setTab("all");
-    const frame = window.requestAnimationFrame(() => {
-      document.getElementById(jump.id)?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
-      setFlash(jump.id);
-    });
-    const timer = window.setTimeout(() => setFlash(null), 1400);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(timer);
+    let timer = 0;
+    let tries = 0;
+    const attempt = () => {
+      const target = document.getElementById(jump.id);
+      const settled = target && (!switching || tries >= 6);
+      if (settled) {
+        target.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
+        setFlash(jump.id);
+        timer = window.setTimeout(() => setFlash(null), 1400);
+      } else if (tries++ < 30) {
+        timer = window.setTimeout(attempt, 60);
+      }
     };
+    timer = window.setTimeout(attempt, 0);
+    return () => window.clearTimeout(timer);
   }, [jump, reduced]);
 
   const loud = layout.files.filter(fileRelevant);
   const quietFiles = layout.marked ? layout.files.filter((item) => !fileRelevant(item)) : [];
   const shown = tab === "all" ? (layout.marked ? loud : layout.files) : layout.files.filter((item) => item.file.path === tab);
-  const drawerFile = drawer ? findFile(layout.files.map((item) => item.file), drawer.path) : undefined;
-  const drawerMarks = drawerFile ? layout.files.find((item) => item.file === drawerFile)?.blocks.flatMap(blockMarks) ?? [] : [];
 
   return (
     <section>
@@ -667,13 +753,14 @@ export function Changes({
                 onOpen={() => {
                   // Open the file at the first line this step asks about.
                   const starts = item.blocks.flatMap(blockMarks).map((mark) => mark.start);
-                  setDrawer({ path: item.file.path, line: starts.length > 0 ? Math.min(...starts) : null });
+                  onOpenFile(item.file.path, starts.length > 0 ? Math.min(...starts) : null);
                 }}
               />
               {item.blocks.map((block) =>
                 relevant(block) ? (
                   <BlockCard
                     key={block.id}
+                    onOpenFile={onOpenFile}
                     block={block}
                     lens={lens}
                     spots={spots}
@@ -716,10 +803,6 @@ export function Changes({
             </div>
           )}
         </motion.div>
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {drawer && drawerFile && <FileDrawer key="drawer" file={drawerFile} marks={drawerMarks} line={drawer.line} onClose={closeDrawer} />}
       </AnimatePresence>
     </section>
   );
