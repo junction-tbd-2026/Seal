@@ -38,11 +38,12 @@ class Plant:
     kind: str
     description: str
     file: str
-    line_start: int
+    line_start: int                  # line numbers in the planted version of the file
     line_end: int
-    patch: str = ""
+    patch: str = ""                  # the planted edit alone, against the real change
     difficulty: str = "medium"       # easy | medium | hard
     proven: Optional[bool] = None    # True once a test distinguishes it from the original
+    variant_diff: str = ""           # the whole change with the edit applied; not saved
 
     @property
     def should_be_flagged(self) -> bool:
@@ -65,12 +66,14 @@ class ReviewResult:
     """What the reviewer said about one variant (or the original)."""
 
     reviewer: str
-    variant_id: str                  # "original" or a Plant.id
+    variant_id: str                  # "original", "altered-requirement" or a Plant.id
     findings: List[Finding] = field(default_factory=list)
     meets_requirement: Optional[bool] = None
     refused_to_decide: List[str] = field(default_factory=list)
-    cost_usd: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     seconds: float = 0.0
+    error: str = ""                  # set when the review could not be completed
 
 
 @dataclass
@@ -82,6 +85,7 @@ class ControlOutcome:
     reviewer: str
     flagged: bool                    # did any finding hit the planted location
     correct: bool                    # flagged for bugs/omissions, quiet for harmless edits
+    inconclusive: bool = False       # the reviewer already flagged this spot in the real change
 
 
 @dataclass
@@ -90,12 +94,23 @@ class RunReport:
 
     change: Change
     reviewer: str
+    planter: str = ""
+    created_at: str = ""
     plants: List[Plant] = field(default_factory=list)
     original_review: Optional[ReviewResult] = None
+    variant_reviews: List[ReviewResult] = field(default_factory=list)
     outcomes: List[ControlOutcome] = field(default_factory=list)
+    altered_requirement: str = ""
+    altered_requirement_review: Optional[ReviewResult] = None
     requirement_flip_changed_verdict: Optional[bool] = None
-    total_cost_usd: float = 0.0
-    total_seconds: float = 0.0
+    build_checked: bool = False
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    wall_seconds: float = 0.0
+    notes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        for plant in data["plants"]:
+            plant.pop("variant_diff", None)
+        return data

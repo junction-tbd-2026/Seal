@@ -1,4 +1,8 @@
+import contextlib
+import io
+import os
 import unittest
+from unittest import mock
 
 from reviewer_controls.matcher import finding_hits_plant, missed_regions, score_plant
 from reviewer_controls.models import KIND_BUG, KIND_HARMLESS, Finding, Plant
@@ -88,14 +92,33 @@ class StatsTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
-    def test_dry_run_succeeds(self):
-        self.assertEqual(main(["--change", "ju26-issue-2283", "--dry-run"]), 0)
+    """Runs the command with no keys file and no key variables, whatever the machine has."""
 
-    def test_real_run_reports_not_built(self):
-        self.assertEqual(main(["--change", "ju26-issue-2283"]), 1)
+    def setUp(self):
+        cleared = {name: "" for name in os.environ if name.startswith(("PLANTER_", "REVIEWER_"))}
+        cleared["JUNCTION_KEYS_FILE"] = "/nonexistent/keys.env"
+        patcher = mock.patch.dict(os.environ, cleared)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_quietly(self, argv):
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+            code = main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_dry_run_succeeds_and_reports_settings_without_values(self):
+        code, out, _ = self.run_quietly(["--change", "ju26-issue-2283", "--dry-run"])
+        self.assertEqual(code, 0)
+        self.assertIn("REVIEWER_API_KEY missing", out)
+
+    def test_real_run_without_keys_fails_cleanly(self):
+        code, _, err = self.run_quietly(["--change", "ju26-issue-2283"])
+        self.assertEqual(code, 2)
+        self.assertIn("is not set", err)
 
     def test_rejects_zero_plants(self):
-        self.assertEqual(main(["--change", "x", "--plants", "0", "--dry-run"]), 2)
+        code, _, _ = self.run_quietly(["--change", "x", "--plants", "0", "--dry-run"])
+        self.assertEqual(code, 2)
 
 
 if __name__ == "__main__":

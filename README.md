@@ -10,8 +10,10 @@ lines to read personally.
 
 ## Status
 
-Skeleton only. The interfaces and two tested helpers exist; the planter,
-reviewer and runner are stubs.
+The pipeline is written and tested end to end with a scripted stand-in for
+the models. It has not yet been run against real models. The step that
+compiles each planted variant is not built, so planted bugs are not yet
+proven to be real defects.
 
 ## How it works
 
@@ -27,9 +29,15 @@ reviewer and runner are stubs.
 | Path | What it holds |
 |---|---|
 | `src/reviewer_controls/models.py` | Data shapes shared by every step |
-| `src/reviewer_controls/planter.py` | Writes the planted variants (stub) |
-| `src/reviewer_controls/reviewer.py` | Calls the reviewer under test (stub) |
+| `src/reviewer_controls/changes.py` | Loads a change and its requirement from the sample repository |
+| `src/reviewer_controls/diffs.py` | Reads diffs and shows them with line numbers |
+| `src/reviewer_controls/llm.py` | Client for OpenAI-compatible model endpoints |
+| `src/reviewer_controls/planter.py` | Writes the planted variants and the altered requirement |
+| `src/reviewer_controls/reviewer.py` | Calls the reviewer under test |
+| `src/reviewer_controls/controls.py` | Runs the whole check and scores it |
+| `src/reviewer_controls/card.py` | Writes the sign-off card |
 | `src/reviewer_controls/runner.py` | Compiles and tests a variant (stub) |
+| `requirements/` | The requirement each sample change claims to meet |
 | `src/reviewer_controls/matcher.py` | Decides whether a finding hit a planted location |
 | `src/reviewer_controls/stats.py` | Honest bounds for small sample counts |
 | `src/reviewer_controls/pipeline.py` | Command-line entry point |
@@ -39,16 +47,34 @@ reviewer and runner are stubs.
 | `results/` | Run outputs as plain JSON, read later by the web page |
 | `work/` | Local clone of the sample repository (not committed) |
 
-## Run
+## Set up
 
-No dependencies are needed yet.
+Python 3.9 or newer; no packages to install.
+
+Clone the sample repository into `work/` (the folder is not committed):
 
 ```bash
-PYTHONPATH=src python3 -m reviewer_controls.pipeline --help
+git clone --filter=blob:none https://github.com/te-industry-tech-office/junction26-messagepack-csharp.git work/junction26-messagepack-csharp
 ```
 
+Put your keys in `~/.junction-keys.env` (see "Keys" below), then check they are seen:
+
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+PYTHONPATH=src python3 -m reviewer_controls.pipeline --change ju26-issue-2283 --dry-run
+```
+
+## Run
+
+```bash
+PYTHONPATH=src python3 -m reviewer_controls.pipeline --change ju26-issue-2283 --plants 10 --kinds bug omission harmless
+```
+
+The run writes a report (`.json`) and a sign-off card (`.card.md`) to `results/`.
+
+Tests need no keys:
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
 ## Keys: three rules
