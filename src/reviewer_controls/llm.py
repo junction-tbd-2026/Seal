@@ -31,6 +31,10 @@ class ChatResponse:
     seconds: float = 0.0
 
 
+class _Refused(Exception):
+    """The provider answered, but with an error instead of a reply (for example a concurrency limit)."""
+
+
 class ChatClient:
     """One model behind an OpenAI-compatible /chat/completions endpoint."""
 
@@ -94,6 +98,13 @@ class ChatClient:
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     body = json.loads(response.read().decode("utf-8"))
+                if isinstance(body, dict) and not body.get("choices"):
+                    # Some providers answer "too many requests at once" with an error body instead
+                    # of an HTTP error. That is worth waiting for, not a broken reply.
+                    detail = body.get("error") or body.get("message") or body.get("detail") or "no choices in the reply"
+                    if isinstance(detail, dict):
+                        detail = detail.get("message") or json.dumps(detail)[:200]
+                    raise _Refused(str(detail).replace(self._api_key, "<key>")[:200])
                 usage = body.get("usage") or {}
                 choice = body["choices"][0]
                 message = choice["message"]
@@ -114,6 +125,8 @@ class ChatClient:
                     completion_tokens=int(usage.get("completion_tokens") or 0),
                     seconds=time.time() - started,
                 )
+            except _Refused as error:
+                last_error = "{} refused the request: {}".format(self.base_url, error)
             except urllib.error.HTTPError as error:
                 last_error = "HTTP {} from {}".format(error.code, self.base_url)
                 if error.code not in (408, 409, 429, 500, 502, 503, 504):

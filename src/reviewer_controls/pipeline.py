@@ -6,6 +6,9 @@ import argparse
 import json
 import re
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from dataclasses import asdict
 from pathlib import Path
 from typing import List, Optional
@@ -155,6 +158,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         planter = ModelPlanter(
             client_for(settings, "PLANTER", debug_dir), repo,
             max_tokens=whole_number(settings, "PLANTER_MAX_TOKENS", PLANT_REPLY_TOKENS),
+            workers=whole_number(settings, "PLANTER_WORKERS", 3),
         )
         reviewers = [
             (
@@ -185,61 +189,86 @@ def main(argv: Optional[List[str]] = None) -> int:
         except (OSError, ValueError, KeyError, TypeError) as error:
             print("error: cannot reuse planted variants from {}: {}".format(args.plants_from, error), file=sys.stderr)
             return 2
-    plants_saved = bool(args.plants_from)
+
+    started = time.time()
+
+    def stage(message: str) -> None:
+        print("[{:>4.0f}s] {}".format(time.time() - started, message))
 
     # Review the real change with every reviewer first, then plant once, inside the lines
     # any of them cited. Each reviewer is then tested on breaks of what it pointed at.
+    # Work that does not depend on other work runs at the same time: the reviewers use
+    # different services, and planting does not wait for the altered requirement.
     firsts = {}
     if plants is None:
-        print("Splitting the requirement into points")
+        stage("Splitting the requirement into points")
         try:
             points = planter.split_requirement(change)
         except ModelError as error:
             points = []
             print("  note: the requirement could not be split into points: {}".format(error))
-        for reviewer, _ in reviewers:
-            print("--- First review: {}".format(reviewer.name))
-            firsts[reviewer.name] = first_reviews(change, reviewer, points, progress=print)
+        stage("First reviews of the real change, all reviewers at once")
+        with ThreadPoolExecutor(max_workers=max(1, len(reviewers))) as pool:
+            futures = {pool.submit(first_reviews, change, reviewer, points): reviewer.name for reviewer, _ in reviewers}
+            for future in as_completed(futures):
+                firsts[futures[future]] = future.result()
+                stage("  first reviews done: {}".format(futures[future]))
         targets = cited_targets([original for original, _ in firsts.values()])
-        print("Planting {} variants ({}) inside the cited lines".format(args.plants, ", ".join(args.kinds)))
-        plants = planter.plant(change, args.plants, args.kinds, points, targets)
+        stage("Planting {} variants ({}) inside the cited lines, and writing the altered requirement".format(
+            args.plants, ", ".join(args.kinds)))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            altering = pool.submit(planter.alter_requirement, change) if altered is None else None
+            plants = planter.plant(change, args.plants, args.kinds, points, targets)
+            if altering is not None:
+                try:
+                    altered = altering.result()
+                except ModelError as error:
+                    print("  note: could not write an altered requirement: {}".format(error))
         for problem in planter.problems:
             print("  note: {}".format(problem))
+        if not plants:
+            print("error: no usable planted variants, so there is nothing to test the reviewers on. Nothing was saved.", file=sys.stderr)
+            return 1
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+        plants_path = out_dir / "{}__plants__{}.json".format(slug(change.id), stamp)
+        save_plants(plants_path, change.id, planter.name, plants, altered, points)
+        stage("Planted variants saved for reuse: {}".format(plants_path))
 
-    lines = []
-    for reviewer, workers in reviewers:
-        print("--- Reviewer: {}".format(reviewer.name))
+    def run_one(entry):
+        reviewer, workers = entry
         original, repeat = firsts.get(reviewer.name, (None, None))
-        report = run_controls(
+        return run_controls(
             change, planter, reviewer,
-            count=args.plants, kinds=args.kinds, workers=workers, progress=print,
+            count=args.plants, kinds=args.kinds, workers=workers,
+            progress=lambda message: print("  [{}] {}".format(reviewer.name, message.strip())),
             plants=plants, altered_requirement=altered, points=points,
             original_review=original, repeat_review=repeat,
         )
-        altered = report.altered_requirement or altered
-        if not plants_saved and plants:
-            plants_path = out_dir / "{}__plants__{}.json".format(slug(change.id), report.created_at.replace(":", ""))
-            save_plants(plants_path, change.id, report.planter, plants, altered, points)
-            print("Planted variants saved for reuse: {}".format(plants_path))
-            plants_saved = True
 
-        stem ="{}__{}__{}".format(slug(change.id), slug(report.reviewer), report.created_at.replace(":", ""))
-        card_path = out_dir / (stem + ".card.md")
-        (out_dir / (stem + ".json")).write_text(json.dumps(report.to_dict(), indent=2))
-        card_path.write_text(render_card(report))
-
-        counts = summarise(report)
-        lines.append(
-            "{}: {} of {} planted defects caught, {} of {} harmless edits wrongly flagged, "
-            "{} reviews failed. Card: {}".format(
-                report.reviewer, counts["defects_caught"], counts["defects_total"],
-                counts["false_alarms"], counts["harmless_total"], counts["failed_reviews"], card_path,
+    # All reviewers at once; each one's results are written the moment it finishes,
+    # so a fast reviewer's results do not wait for a slow one.
+    stage("Reviewing {} variants with {} reviewers at once".format(len(plants or []), len(reviewers)))
+    lines = []
+    with ThreadPoolExecutor(max_workers=max(1, len(reviewers))) as pool:
+        for future in as_completed([pool.submit(run_one, entry) for entry in reviewers]):
+            report = future.result()
+            stem = "{}__{}__{}".format(slug(change.id), slug(report.reviewer), report.created_at.replace(":", ""))
+            card_path = out_dir / (stem + ".card.md")
+            (out_dir / (stem + ".json")).write_text(json.dumps(report.to_dict(), indent=2))
+            card_path.write_text(render_card(report))
+            counts = summarise(report)
+            stage("Results written for {}".format(report.reviewer))
+            lines.append(
+                "{}: {} of {} planted defects caught, {} of {} harmless edits wrongly flagged, "
+                "{} reviews failed. Card: {}".format(
+                    report.reviewer, counts["defects_caught"], counts["defects_total"],
+                    counts["false_alarms"], counts["harmless_total"], counts["failed_reviews"], card_path,
+                )
             )
-        )
-        for note in report.notes:
-            print("  note: {}".format(note))
+            for note in report.notes:
+                print("  note: {}".format(note))
 
-    print("Done.")
+    stage("Done.")
     for line in lines:
         print("  " + line)
     return 0

@@ -7,6 +7,7 @@ reviewer is not graded on bugs written in its own style.
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -221,6 +222,13 @@ def apply_edit(
     return "\n".join(new_lines), start, last
 
 
+def renumber(plants: List[Plant]) -> List[Plant]:
+    """Give planted variants the ids p01, p02, ... in order."""
+    for number, plant in enumerate(plants, start=1):
+        plant.id = "p{:02d}".format(number)
+    return plants
+
+
 class ModelPlanter(Planter):
     """Asks a model to write the variants."""
 
@@ -230,11 +238,13 @@ class ModelPlanter(Planter):
         repo: Path,
         name: Optional[str] = None,
         max_tokens: int = PLANT_REPLY_TOKENS,
+        workers: int = 3,
     ) -> None:
         self.client = client
         self.repo = repo
         self.name = name or client.model
         self.max_tokens = max_tokens
+        self.workers = max(1, workers)   # planting requests sent at once
         self._points: List[RequirementPoint] = []
         self._targets: Dict[str, List[dict]] = {}
         self.problems: List[str] = []   # why fewer variants came back than were asked for
@@ -271,16 +281,18 @@ class ModelPlanter(Planter):
             files = cited or files
         if not files:
             return []
-        plants: List[Plant] = []
         kind_cycle = [kinds[i % len(kinds)] for i in range(count)]
+        jobs = []
         next_kind = 0
         for file_diff, share in zip(files, allocate(files, count)):
             if share == 0:
                 continue
-            wanted_kinds = kind_cycle[next_kind:next_kind + share]
+            jobs.append((file_diff, kind_cycle[next_kind:next_kind + share]))
             next_kind += share
-            plants.extend(self._plant_in_file(change, file_diff, wanted_kinds, first_number=len(plants) + 1))
-        return plants
+        # One request per file, sent at the same time; the files do not depend on each other.
+        with ThreadPoolExecutor(max_workers=self.workers) as pool:
+            per_file = list(pool.map(lambda job: self._plant_in_file(change, job[0], job[1], first_number=1), jobs))
+        return renumber([plant for found in per_file for plant in found])
 
     def _cited_in(self, path: str) -> Dict[str, List[Tuple[int, int]]]:
         """For one file: each point's cited line ranges."""

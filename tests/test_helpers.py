@@ -123,3 +123,38 @@ class PipelineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RefusedRequestTests(unittest.TestCase):
+    def test_an_error_body_instead_of_a_reply_is_retried_and_explained(self):
+        import json as _json
+        from reviewer_controls.llm import ChatClient, ModelError
+
+        class Reply:
+            def __init__(self, body):
+                self.body = body
+
+            def read(self):
+                return _json.dumps(self.body).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        replies = iter([
+            Reply({"error": {"message": "Concurrency limit reached for key-SECRETVALUE"}}),
+            Reply({"choices": [{"message": {"content": "fine"}, "finish_reason": "stop"}], "usage": {}}),
+        ])
+        client = ChatClient("https://example.invalid/v1", "m", "key-SECRETVALUE", max_retries=2)
+        with mock.patch("urllib.request.urlopen", lambda *a, **k: next(replies)), mock.patch("time.sleep"):
+            self.assertEqual(client.complete("s", "u").text, "fine")
+
+        always = ChatClient("https://example.invalid/v1", "m", "key-SECRETVALUE", max_retries=1)
+        refused = lambda *a, **k: Reply({"error": "Concurrency limit reached for key-SECRETVALUE"})
+        with mock.patch("urllib.request.urlopen", refused), mock.patch("time.sleep"):
+            with self.assertRaises(ModelError) as caught:
+                always.complete("s", "u")
+        self.assertIn("refused the request", str(caught.exception))
+        self.assertNotIn("SECRETVALUE", str(caught.exception))

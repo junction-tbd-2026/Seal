@@ -97,14 +97,15 @@ def first_reviews(
     points: Sequence[RequirementPoint],
     progress: Progress = None,
 ) -> Tuple[ReviewResult, Optional[ReviewResult]]:
-    """Review the real change, then review it again unchanged as a control for chance."""
-    _say(progress, "Reviewing the real change")
-    original = reviewer.review(change, points=list(points))
-    repeat = None
-    if points and not original.error:
-        _say(progress, "Reviewing the real change a second time, unchanged")
-        repeat = reviewer.review(change, variant_id="repeat", points=list(points))
-    return original, repeat
+    """Review the real change, and again unchanged as a control for chance. Both run at once."""
+    _say(progress, "Reviewing the real change, twice at the same time")
+    if not points:
+        return reviewer.review(change, points=list(points)), None
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(reviewer.review, change, points=list(points))
+        second = pool.submit(reviewer.review, change, variant_id="repeat", points=list(points))
+        original, repeat = first.result(), second.result()
+    return original, (None if original.error else repeat)
 
 
 def run_controls(

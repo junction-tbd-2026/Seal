@@ -109,8 +109,11 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
 - To finish them (needs keys, see below), run the pipeline for
   `ju26-issue-2129` and `ju26-issue-2297`, then regenerate the summary with
   `scripts/summarise_results.py` and commit `results/` and `docs/results.md`.
-  A full run of one pull request takes about 12 minutes; Gemma is the slow
-  part because it runs one review at a time.
+  Work that does not depend on other work now runs at the same time: both
+  reviews of the real change, all reviewers, the planting requests and the
+  altered requirement. Set `REVIEWER2_WORKERS=4` in your keys file (Featherless
+  accepted 4 Gemma requests at once in our test); a run of one pull request
+  should then take roughly 10 to 15 minutes instead of about 30.
 - Not started: running the planted copies (Modal), the product name, the
   video, the public repository.
 
@@ -272,7 +275,8 @@ What the keys file holds (names only):
 | `PLANTER_BASE_URL`, `PLANTER_MODEL`, `PLANTER_API_KEY` | The model that writes the planted breaks |
 | `REVIEWER_BASE_URL`, `REVIEWER_MODEL`, `REVIEWER_API_KEY` | Reviewer 1 (NVIDIA Nemotron) |
 | `REVIEWER2_BASE_URL`, `REVIEWER2_MODEL`, `REVIEWER2_API_KEY` | Reviewer 2 (Google Gemma), optional |
-| `REVIEWER_MAX_TOKENS`, `REVIEWER_MAX_DIFF_CHARS`, `REVIEWER_WORKERS` | Optional limits per reviewer |
+| `REVIEWER_MAX_TOKENS`, `REVIEWER_MAX_DIFF_CHARS`, `REVIEWER_WORKERS` | Optional limits per reviewer; `_WORKERS` is how many reviews run at once |
+| `PLANTER_WORKERS` | Optional: planting requests sent at once (default 3) |
 
 ## Working together
 
@@ -305,6 +309,7 @@ What the keys file holds (names only):
 | `docs/` | Concept card, lessons log, results summary |
 | `scripts/setup.sh` | One-time setup for a new clone |
 | `scripts/probe_models.py` | Checks the model endpoints answer; never prints keys |
+| `scripts/probe_concurrency.py` | Measures how many requests at once a model service accepts, to set `_WORKERS` |
 | `scripts/summarise_results.py` | Regenerates `docs/results.md` |
 | `.githooks/` | Commit and push checks that block keys |
 | `keys.example.env` | Template for the keys file (no real values) |
