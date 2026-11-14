@@ -83,6 +83,21 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
 [docs/lessons-log.md](docs/lessons-log.md) (decisions and failures),
 [docs/results.md](docs/results.md) (numbers).
 
+## Status (Saturday 14 November, morning)
+
+- The pipeline, the page and the tests work. The concept card and lessons
+  log are up to date.
+- **Results are partial.** The pipeline changed this morning, so all four
+  sample changes are being rerun. In `results/` now: pull request #1 with
+  both reviewers, and pull request #2 with Nemotron. Still to come: pull
+  request #2 with Gemma, and pull requests #3 and #4. On the page those show
+  as "Not tested yet" until their results are committed.
+- The reruns are running on Timo's machine. When they finish, regenerate
+  the summary with `scripts/summarise_results.py` and commit `results/` and
+  `docs/results.md`. Nobody else needs to start them.
+- Not started: running the planted copies (Modal), the product name, the
+  video, the public repository.
+
 ## Next steps
 
 1. **Run the planted copies.** Build each copy and run the project's tests in
