@@ -1,4 +1,4 @@
-import type { ChangeSummary, Exam, PlantKind, PullList, Result, SignOff } from "./types";
+import type { ChangeSummary, Exam, PlantKind, PullList, Result, SignResult } from "./types";
 
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -10,9 +10,10 @@ export const fetchChanges = () => getJson<ChangeSummary[]>("/api/changes");
 
 export const fetchPulls = () => getJson<PullList>("/api/pulls");
 
-export const fetchExam = (changeId: string) => getJson<Exam>(`/api/exam/${encodeURIComponent(changeId)}`);
+/** The change to show for sign-off. It may be a spot-check copy; the page cannot tell and must not try to. */
+export const fetchReview = (changeId: string) => getJson<Exam>(`/api/review/${encodeURIComponent(changeId)}`);
 
-export async function postSignOff(body: Omit<SignOff, "signed_at">): Promise<SignOff> {
+export async function postSignOff(body: { session: string; reviewer: string; name: string; decision: string }): Promise<SignResult> {
   const response = await fetch("/api/signoff", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -22,7 +23,7 @@ export async function postSignOff(body: Omit<SignOff, "signed_at">): Promise<Sig
     const detail = await response.json().catch(() => null);
     throw new Error(detail?.detail ?? `sign-off was refused (${response.status})`);
   }
-  return (await response.json()) as SignOff;
+  return (await response.json()) as SignResult;
 }
 
 /** "google/gemma-4-31B-it" -> "Gemma 4 31B"; "nemotron-3.5-super-vl" -> "Nemotron 3.5 Super VL". */

@@ -14,13 +14,32 @@ export type Plant = {
   file: string;
   line_start: number;
   line_end: number;
+  breaks?: string | null;
   patch: FileDiff[];
 };
 
 export type Finding = { file: string; line_start: number; line_end: number; message: string; severity: string };
 
+export type PointStatus = "met" | "not_met" | "cannot_tell";
+
+export type EvidenceRef = { file: string; line_start: number; line_end: number };
+
+/** One requirement point as one reviewer sees it, and whether it noticed when we broke that point. */
+export type PointView = {
+  id: string;
+  text: string;
+  status: PointStatus;
+  evidence: EvidenceRef[];
+  reason: string;
+  broken_total: number;
+  broken_noticed: number;
+  noticed: "yes" | "no" | "partly" | "untested";
+  missed_plants: string[];
+};
+
 export type Reviewer = {
   name: string;
+  points: PointView[];
   run_file: string;
   created_at: string;
   verdict: boolean | null;
@@ -58,6 +77,8 @@ export type Exam = {
     files: FileDiff[];
   };
   planter: string;
+  session?: string;
+  requirement_points: { id: string; text: string }[];
   created_at: string;
   build_checked: boolean;
   altered_requirement: string;
@@ -92,4 +113,17 @@ export type Pull = {
   signed: SignOff | null;
 };
 
-export type PullList = { repository: string; repository_url: string; base_branch: string; pull_requests: Pull[] };
+export type SpotRecord = { enabled: boolean; checked: number; caught: number };
+
+export type PullList = {
+  repository: string;
+  repository_url: string;
+  base_branch: string;
+  pull_requests: Pull[];
+  spot_checks: SpotRecord;
+};
+
+/** What signing returns: either a recorded sign-off, or the reveal that the copy shown was a spot-check. */
+export type SignResult =
+  | { spot_check: false; signoff: SignOff }
+  | { spot_check: true; caught: boolean; seconds: number; plant: Plant; record: SpotRecord };

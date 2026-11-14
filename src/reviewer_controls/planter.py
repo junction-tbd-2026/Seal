@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .changes import file_at
 from .diffs import FileDiff, file_diff_text, overlaps_added, replace_file_in_diff, split_diff
 from .llm import ChatClient, ModelError, as_int, extract_json
-from .models import KIND_BUG, KIND_HARMLESS, KIND_OMISSION, Change, Plant
+from .models import KIND_BUG, KIND_HARMLESS, KIND_OMISSION, Change, Plant, RequirementPoint
 
 EXCERPT_CONTEXT_LINES = 30
 EXCERPT_MAX_LINES = 500
@@ -42,10 +42,22 @@ Rules:
   but every edit must be a different defect.
 - Work quickly. Pick the edits and write them down; do not deliberate at length or weigh many alternatives.
 
+When requirement points are listed, say which one each edit breaks: "breaks": "R2".
+Use null for a harmless edit, or when no single point is broken. Spread the edits across the points.
+
 Reply with JSON only, in this shape:
 {"edits": [{"kind": "bug", "difficulty": "easy|medium|hard", "description": "what is wrong and why it matters",
-"line_start": 10, "line_end": 12, "original": "exact current text of those lines",
+"breaks": "R1", "line_start": 10, "line_end": 12, "original": "exact current text of those lines",
 "replacement": "new text for those lines, or an empty string to delete them"}]}"""
+
+POINTS_SYSTEM = """You turn a software requirement into a short checklist a code reviewer can verify.
+You are given a requirement and the code change written to meet it.
+Write three to six points. Each point is one behaviour the change must deliver, stated so that a reviewer
+can say met, not met or cannot tell by reading the change. Cover what the requirement asks for, not how
+this change happens to do it. Do not include points about style, tests or documentation.
+
+Reply with JSON only, in this shape:
+{"points": [{"id": "R1", "text": "one sentence"}]}"""
 
 ALTER_SYSTEM = """You rewrite a software requirement so that it asks for clearly different behaviour.
 You are given a requirement and a code change that implements it.
@@ -59,7 +71,17 @@ class Planter:
 
     name = "planter"
 
-    def plant(self, change: Change, count: int, kinds: Sequence[str] = (KIND_BUG,)) -> List[Plant]:
+    def split_requirement(self, change: Change) -> List[RequirementPoint]:
+        """Return the requirement as a short list of checkable points."""
+        raise NotImplementedError
+
+    def plant(
+        self,
+        change: Change,
+        count: int,
+        kinds: Sequence[str] = (KIND_BUG,),
+        points: Optional[List[RequirementPoint]] = None,
+    ) -> List[Plant]:
         """Return up to `count` variants of `change`, one planted edit each."""
         raise NotImplementedError
 
@@ -176,9 +198,29 @@ class ModelPlanter(Planter):
         self.repo = repo
         self.name = name or client.model
         self.max_tokens = max_tokens
+        self._points: List[RequirementPoint] = []
         self.problems: List[str] = []   # why fewer variants came back than were asked for
 
-    def plant(self, change: Change, count: int, kinds: Sequence[str] = (KIND_BUG,)) -> List[Plant]:
+    def split_requirement(self, change: Change) -> List[RequirementPoint]:
+        user = "Requirement:\n{}\n\nCode change (diff):\n{}".format(change.requirement_text.strip(), change.diff[:40000])
+        reply = extract_json(
+            self.client.complete(POINTS_SYSTEM, user, temperature=0.0, max_tokens=self.max_tokens).text,
+            accept=lambda value: isinstance(value, dict) and isinstance(value.get("points"), list),
+        )
+        points: List[RequirementPoint] = []
+        for item in reply["points"][:6]:
+            if isinstance(item, dict) and str(item.get("text") or "").strip():
+                points.append(RequirementPoint(id="R{}".format(len(points) + 1), text=str(item["text"]).strip()))
+        return points
+
+    def plant(
+        self,
+        change: Change,
+        count: int,
+        kinds: Sequence[str] = (KIND_BUG,),
+        points: Optional[List[RequirementPoint]] = None,
+    ) -> List[Plant]:
+        self._points = points or []
         files = candidate_files(change)
         if not files:
             return []
@@ -200,9 +242,11 @@ class ModelPlanter(Planter):
         base_text = file_at(self.repo, change.base_ref, file_diff.path)
         counts = {kind: kinds.count(kind) for kind in (KIND_BUG, KIND_OMISSION, KIND_HARMLESS) if kind in kinds}
         request = ", ".join("{} of kind \"{}\"".format(n + SPARE_PROPOSALS, kind) for kind, n in counts.items())
+        listed = "".join("\n{}: {}".format(point.id, point.text) for point in self._points)
         user = (
-            "Requirement:\n{}\n\nFile: {}\n\n{}\n\nPropose {}.".format(
+            "Requirement:\n{}\n{}\nFile: {}\n\n{}\n\nPropose {}.".format(
                 change.requirement_text.strip(),
+                "\nRequirement points:{}\n".format(listed) if listed else "",
                 file_diff.path,
                 numbered_excerpt(head_text, file_diff.added_ranges),
                 request,
@@ -255,6 +299,11 @@ class ModelPlanter(Planter):
                     line_end=end,
                     patch=file_diff_text(file_diff.path, head_text, new_text),
                     difficulty=str(proposal.get("difficulty") or "medium"),
+                    breaks=(
+                        proposal.get("breaks")
+                        if kind != KIND_HARMLESS and proposal.get("breaks") in {point.id for point in self._points}
+                        else None
+                    ),
                     variant_diff=replace_file_in_diff(
                         change.diff, file_diff.path, file_diff_text(file_diff.path, base_text, new_text)
                     ),

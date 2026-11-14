@@ -2,16 +2,18 @@ import { useEffect, useRef } from "react";
 import type { FileDiff } from "./types";
 
 /** "blind": the reviewer missed a mistake we planted here. "finding": the reviewer reported a problem here. */
-export type Mark = { start: number; end: number; tone: "blind" | "finding" };
+export type Mark = { start: number; end: number; tone: "blind" | "finding" | "evidence"; label?: string };
 
 const MARK_ROW: Record<Mark["tone"], string> = {
   blind: "bg-missed-wash shadow-[inset_5px_0_0_var(--color-missed)]",
   finding: "bg-warn-wash shadow-[inset_5px_0_0_var(--color-warn)]",
+  evidence: "bg-brand-wash shadow-[inset_5px_0_0_var(--color-brand)]",
 };
 
 const MARK_TAG: Record<Mark["tone"], { text: string; style: string }> = {
   blind: { text: "Check this yourself", style: "bg-missed text-white" },
   finding: { text: "Reviewer flagged this", style: "bg-warn text-ink" },
+  evidence: { text: "Cited as evidence", style: "bg-brand text-white" },
 };
 
 const ROW_STYLE: Record<string, string> = {
@@ -75,7 +77,7 @@ export function DiffView({
                     <span
                       className={`mr-2 inline-block rounded-sm border-2 border-ink px-1.5 font-sans text-[10.5px] font-bold uppercase leading-[1.5] tracking-wide ${MARK_TAG[tagAt(row.n)!.tone].style}`}
                     >
-                      {MARK_TAG[tagAt(row.n)!.tone].text}
+                      {tagAt(row.n)!.label ?? MARK_TAG[tagAt(row.n)!.tone].text}
                     </span>
                   )}
                   {tagAt(row.n) ? row.text.trimStart() : row.text || " "}

@@ -1,4 +1,4 @@
-"""Runs the controls on one change: plant, review blind, score, alter the requirement."""
+"""Runs the controls on one change: split the requirement, plant, review blind, score."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from .llm import ModelError
 from .matcher import finding_hits_plant, score_plant
-from .models import KIND_BUG, KIND_HARMLESS, Change, ControlOutcome, Plant, ReviewResult, RunReport
+from .models import KIND_BUG, KIND_HARMLESS, Change, ControlOutcome, Plant, RequirementPoint, ReviewResult, RunReport
 from .planter import Planter
 from .reviewer import Reviewer
 
@@ -21,9 +21,25 @@ def _say(progress: Progress, message: str) -> None:
         progress(message)
 
 
+def point_status(review: ReviewResult, point_id: Optional[str]) -> Optional[str]:
+    if not point_id:
+        return None
+    return next((point.status for point in review.points if point.id == point_id), None)
+
+
 def score(plant: Plant, variant: ReviewResult, original: ReviewResult) -> ControlOutcome:
-    """Grade one variant. A spot the reviewer already flagged in the real change proves nothing."""
+    """Grade one variant.
+
+    A planted defect counts as caught when the reviewer flags the planted spot, or stops
+    calling the requirement point it breaks "met". A spot the reviewer already flagged in
+    the real change proves nothing and is marked inconclusive.
+    """
     outcome = score_plant(plant, variant.findings, variant.reviewer)
+    outcome.point_id = plant.breaks
+    if plant.breaks and point_status(original, plant.breaks) == "met":
+        outcome.point_noticed = point_status(variant, plant.breaks) != "met"
+        if plant.should_be_flagged and outcome.point_noticed:
+            outcome.correct = True
     if any(finding_hits_plant(f, plant) for f in original.findings):
         outcome.inconclusive = True
     return outcome
@@ -39,10 +55,11 @@ def run_controls(
     progress: Progress = None,
     plants: Optional[List[Plant]] = None,
     altered_requirement: Optional[str] = None,
+    points: Optional[List[RequirementPoint]] = None,
 ) -> RunReport:
     """Run the controls for one reviewer.
 
-    Pass `plants` and `altered_requirement` from an earlier run to test a second
+    Pass `plants`, `points` and `altered_requirement` from an earlier run to test a second
     reviewer on exactly the same variants, so the two can be compared fairly.
     """
     started = time.time()
@@ -55,25 +72,36 @@ def run_controls(
     if planter.name == reviewer.name:
         report.notes.append("Planter and reviewer are the same model, so the reviewer is graded on its own style of bug.")
 
+    if points is None and plants is None:
+        _say(progress, "Splitting the requirement into points")
+        try:
+            points = planter.split_requirement(change)
+        except (ModelError, NotImplementedError) as error:
+            points = []
+            report.notes.append("The requirement could not be split into points: {}".format(error))
+    report.requirement_points = points or []
+
     if plants is not None:
         _say(progress, "Reusing {} planted variants".format(len(plants)))
         report.plants = plants
     else:
         _say(progress, "Planting {} variants ({})".format(count, ", ".join(kinds)))
-        report.plants = planter.plant(change, count, kinds)
+        report.plants = planter.plant(change, count, kinds, report.requirement_points)
         report.notes.extend(getattr(planter, "problems", []))
     if len(report.plants) < count:
         report.notes.append("Asked for {} planted variants; {} were usable.".format(count, len(report.plants)))
 
     _say(progress, "Reviewing the real change")
-    report.original_review = reviewer.review(change)
+    report.original_review = reviewer.review(change, points=report.requirement_points)
     if report.original_review.error:
         report.notes.append("The review of the real change failed: {}".format(report.original_review.error))
 
     _say(progress, "Reviewing {} variants blind".format(len(report.plants)))
 
     def review_variant(plant: Plant) -> ReviewResult:
-        result = reviewer.review(change, variant_id=plant.id, variant_diff=plant.variant_diff)
+        result = reviewer.review(
+            change, variant_id=plant.id, variant_diff=plant.variant_diff, points=report.requirement_points
+        )
         _say(progress, "  {} reviewed".format(plant.id))
         return result
 

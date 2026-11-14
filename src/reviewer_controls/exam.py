@@ -94,7 +94,7 @@ def _result(plant: Dict[str, Any], review: Optional[Dict[str, Any]], outcome: Op
         return "inconclusive"
     if plant["kind"] == KIND_HARMLESS:
         return "false_alarm" if outcome["flagged"] else "left_alone"
-    return "caught" if outcome["flagged"] else "missed"
+    return "caught" if outcome.get("correct", outcome["flagged"]) else "missed"
 
 
 def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
@@ -121,8 +121,32 @@ def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
                 break
 
     original = run.get("original_review") or {}
+
+    # The requirement, point by point: what the reviewer claims, the lines it cites,
+    # and whether it noticed when we broke that point in a planted copy.
+    assessed = {p["id"]: p for p in original.get("points", [])}
+    points = []
+    for point in run.get("requirement_points", []):
+        claim = assessed.get(point["id"], {})
+        broken = [p for p in plants if p.get("breaks") == point["id"] and results[p["id"]] in ("caught", "missed")]
+        noticed = sum(1 for p in broken if results[p["id"]] == "caught")
+        points.append(
+            {
+                "id": point["id"],
+                "text": point["text"],
+                "status": claim.get("status", "cannot_tell"),
+                "evidence": claim.get("evidence", []),
+                "reason": claim.get("reason", ""),
+                "broken_total": len(broken),
+                "broken_noticed": noticed,
+                "noticed": "untested" if not broken else "yes" if noticed == len(broken) else "no" if noticed == 0 else "partly",
+                "missed_plants": [p["id"] for p in broken if results[p["id"]] == "missed"],
+            }
+        )
+
     return {
         "name": run["reviewer"],
+        "points": points,
         "run_file": run["_file"],
         "created_at": run.get("created_at", ""),
         "verdict": original.get("meets_requirement"),
@@ -192,6 +216,7 @@ def build_exam(results_dir: Path, change_id: str) -> Optional[Dict[str, Any]]:
             "files": structured_diff(change.get("diff", "")),
         },
         "planter": newest.get("planter", ""),
+        "requirement_points": newest.get("requirement_points", []),
         "created_at": newest.get("created_at", ""),
         "build_checked": bool(newest.get("build_checked")),
         "altered_requirement": newest.get("altered_requirement", ""),
@@ -204,6 +229,7 @@ def build_exam(results_dir: Path, change_id: str) -> Optional[Dict[str, Any]]:
                 "file": p["file"],
                 "line_start": p["line_start"],
                 "line_end": p["line_end"],
+                "breaks": p.get("breaks"),
                 "patch": structured_diff(p.get("patch", "")),
             }
             for p in newest["plants"]

@@ -1,7 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useState } from "react";
 import { DiffView } from "./DiffView";
-import { KIND_LABEL, KIND_MEANING, RESULT_LABEL, RESULT_MEANING, fileName, formatWhen, postSignOff, prettyModel } from "./lib";
+import { KIND_LABEL, KIND_MEANING, RESULT_LABEL, RESULT_MEANING, fileName, formatWhen, prettyModel } from "./lib";
 import type { Exam, Plant, Result, Reviewer, SignOff } from "./types";
 
 const SQUARE: Record<Result, string> = {
@@ -44,14 +44,14 @@ export function Evidence({
   reviewer,
   onReviewer,
   signoffs,
-  onSigned,
+  onSign,
   onJump,
 }: {
   exam: Exam;
   reviewer: Reviewer;
   onReviewer: (name: string) => void;
   signoffs: SignOff[];
-  onSigned: (entry: SignOff) => void;
+  onSign: (name: string, decision: string) => Promise<void>;
   onJump: (plant: Plant) => void;
 }) {
   const reduced = useReducedMotion() ?? false;
@@ -86,7 +86,7 @@ export function Evidence({
     setBusy(true);
     setError(null);
     try {
-      onSigned(await postSignOff({ change_id: exam.change.id, reviewer: reviewer.name, name, decision }));
+      await onSign(name, decision);
       setName("");
     } catch (problem) {
       setError(problem instanceof Error ? problem.message : "The sign-off could not be saved.");

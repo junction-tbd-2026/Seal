@@ -31,6 +31,24 @@ class Change:
 
 
 @dataclass
+class RequirementPoint:
+    """One checkable statement taken from the requirement."""
+
+    id: str                          # R1, R2, ...
+    text: str
+
+
+@dataclass
+class PointAssessment:
+    """What the reviewer says about one requirement point, and the lines it cites."""
+
+    id: str
+    status: str = "cannot_tell"      # met | not_met | cannot_tell
+    evidence: List[dict] = field(default_factory=list)   # [{"file", "line_start", "line_end"}]
+    reason: str = ""
+
+
+@dataclass
 class Plant:
     """One planted variant of a change: where it is and what it should provoke."""
 
@@ -43,6 +61,7 @@ class Plant:
     patch: str = ""                  # the planted edit alone, against the real change
     difficulty: str = "medium"       # easy | medium | hard
     proven: Optional[bool] = None    # True once a test distinguishes it from the original
+    breaks: Optional[str] = None     # the requirement point this edit breaks, if any
     variant_diff: str = ""           # the whole change with the edit applied; not saved
 
     @property
@@ -70,6 +89,7 @@ class ReviewResult:
     findings: List[Finding] = field(default_factory=list)
     meets_requirement: Optional[bool] = None
     refused_to_decide: List[str] = field(default_factory=list)
+    points: List[PointAssessment] = field(default_factory=list)
     prompt_tokens: int = 0
     completion_tokens: int = 0
     seconds: float = 0.0
@@ -86,6 +106,8 @@ class ControlOutcome:
     flagged: bool                    # did any finding hit the planted location
     correct: bool                    # flagged for bugs/omissions, quiet for harmless edits
     inconclusive: bool = False       # the reviewer already flagged this spot in the real change
+    point_id: Optional[str] = None   # the requirement point the planted edit breaks
+    point_noticed: Optional[bool] = None   # did the reviewer stop calling that point met
 
 
 @dataclass
@@ -96,6 +118,7 @@ class RunReport:
     reviewer: str
     planter: str = ""
     created_at: str = ""
+    requirement_points: List[RequirementPoint] = field(default_factory=list)
     plants: List[Plant] = field(default_factory=list)
     original_review: Optional[ReviewResult] = None
     variant_reviews: List[ReviewResult] = field(default_factory=list)

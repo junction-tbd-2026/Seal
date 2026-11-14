@@ -17,8 +17,9 @@ from reviewer_controls.diffs import render_numbered, split_diff
 from reviewer_controls.llm import ChatResponse, ModelError, extract_json
 from reviewer_controls.models import KIND_BUG, KIND_HARMLESS
 from reviewer_controls.pipeline import load_plants, save_plants
-from reviewer_controls.planter import ALTER_SYSTEM, PLANT_SYSTEM, ModelPlanter, allocate, candidate_files, locate
-from reviewer_controls.reviewer import REVIEW_SYSTEM, ModelReviewer, fit_diff
+from reviewer_controls.planter import ALTER_SYSTEM, PLANT_SYSTEM, POINTS_SYSTEM, ModelPlanter, allocate, candidate_files, locate
+from reviewer_controls.models import RequirementPoint
+from reviewer_controls.reviewer import REVIEW_SYSTEM, ModelReviewer, fit_diff, parse_points
 
 BASE = """public class Calc
 {
@@ -44,12 +45,12 @@ HEAD = """public class Calc
 
 PROPOSALS = {
     "edits": [
-        {"kind": "bug", "difficulty": "easy", "description": "comparison inverted",
+        {"kind": "bug", "difficulty": "easy", "description": "comparison inverted", "breaks": "R1",
          "line_start": 5, "line_end": 5, "original": "if (value > max)", "replacement": "        if (value < max)"},
         # Line numbers deliberately wrong: the quoted text must rescue it.
-        {"kind": "bug", "difficulty": "hard", "description": "clamps one below the maximum",
+        {"kind": "bug", "difficulty": "hard", "description": "clamps one below the maximum", "breaks": "R1",
          "line_start": 70, "line_end": 70, "original": "return max;", "replacement": "            return max - 1;"},
-        {"kind": "harmless", "difficulty": "easy", "description": "redundant parentheses",
+        {"kind": "harmless", "difficulty": "easy", "description": "redundant parentheses", "breaks": "R2",
          "line_start": 9, "line_end": 9, "original": "return value;", "replacement": "        return (value);"},
         {"kind": "bug", "difficulty": "easy", "description": "quotes text that is not in the file",
          "line_start": 6, "line_end": 6, "original": "while (true)", "replacement": "for (;;)"},
@@ -69,12 +70,23 @@ class ScriptedModel:
 
     def complete(self, system, user, temperature=0.0, max_tokens=4000):
         self.calls.append((system, user))
+        if system == POINTS_SYSTEM:
+            points = [{"id": "x", "text": "Values above max come back as max."},
+                      {"id": "y", "text": "Values at or below max come back unchanged."}]
+            return ChatResponse(json.dumps({"points": points}), 20, 20, 0.1)
         if system == PLANT_SYSTEM:
             return ChatResponse("Here you go:\n```json\n{}\n```".format(json.dumps(PROPOSALS)), 100, 50, 0.1)
         if system == ALTER_SYSTEM:
             return ChatResponse("ALTERED: values above max must raise an error instead of being clamped.", 10, 10, 0.1)
         if system == REVIEW_SYSTEM:
             reply = {"meets_requirement": True, "findings": [], "refused_to_decide": ["Whether max can be negative."]}
+            if "Requirement points:" in user:
+                reply["points"] = [
+                    {"id": "R1", "status": "not_met" if "value < max" in user else "met",
+                     "evidence": [{"file": "src/Calc.cs", "line_start": 5, "line_end": 8}], "reason": "the clamp"},
+                    {"id": "R2", "status": "met",
+                     "evidence": [{"file": "src/Calc.cs", "line_start": 9, "line_end": 9}], "reason": "falls through"},
+                ]
             if "ALTERED" in user:
                 reply["meets_requirement"] = False
             if "value < max" in user:
@@ -203,6 +215,42 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual([(p.line_start, p.description) for p in plants],
                          [(5, "if (value < max)"), (5, "if (value > max + 1)")])
 
+    def test_requirement_is_split_into_points_and_each_gets_evidence(self):
+        report, model = self.run_all()
+        self.assertEqual([(p.id, p.text) for p in report.requirement_points],
+                         [("R1", "Values above max come back as max."), ("R2", "Values at or below max come back unchanged.")])
+        self.assertEqual([p.breaks for p in report.plants], ["R1", "R1", None])   # a harmless edit breaks nothing
+        original = report.original_review.points
+        self.assertEqual([(p.id, p.status, p.evidence[0]["line_start"]) for p in original], [("R1", "met", 5), ("R2", "met", 9)])
+        plant_prompt = [user for system, user in model.calls if system == PLANT_SYSTEM][0]
+        self.assertIn("R1: Values above max come back as max.", plant_prompt)
+        by_plant = {o.plant_id: o for o in report.outcomes}
+        self.assertEqual((by_plant["p01"].point_id, by_plant["p01"].point_noticed), ("R1", True))
+        self.assertEqual((by_plant["p02"].point_id, by_plant["p02"].point_noticed), ("R1", False))
+        self.assertEqual((by_plant["p03"].point_id, by_plant["p03"].point_noticed), (None, None))
+
+    def test_noticing_a_broken_point_counts_as_catching_it_even_without_a_line(self):
+        class NoticesByPoint(ScriptedModel):
+            def complete(self, system, user, temperature=0.0, max_tokens=4000):
+                response = ScriptedModel.complete(self, system, user, temperature, max_tokens)
+                if system == REVIEW_SYSTEM and "max - 1" in user:
+                    reply = json.loads(response.text)
+                    reply["points"][0]["status"] = "cannot_tell"
+                    return ChatResponse(json.dumps(reply), 1, 1, 0.1)
+                return response
+
+        report = run_controls(self.change, ModelPlanter(ScriptedModel(), self.repo, name="p"),
+                              ModelReviewer(NoticesByPoint(), name="r"), count=3, kinds=(KIND_BUG, KIND_HARMLESS))
+        outcome = {o.plant_id: o for o in report.outcomes}["p02"]
+        self.assertEqual((outcome.flagged, outcome.point_noticed, outcome.correct), (False, True, True))
+        self.assertEqual(summarise(report)["defects_caught"], 2)
+
+    def test_altered_requirement_review_is_not_given_the_original_points(self):
+        _, model = self.run_all()
+        altered = [user for system, user in model.calls if system == REVIEW_SYSTEM and "ALTERED" in user]
+        self.assertEqual(len(altered), 1)
+        self.assertNotIn("Requirement points:", altered[0])
+
     def test_a_second_reviewer_sits_the_same_exam(self):
         model = ScriptedModel()
         planter = ModelPlanter(model, self.repo, name="planter-model")
@@ -210,8 +258,11 @@ class EndToEndTests(unittest.TestCase):
                              count=3, kinds=(KIND_BUG, KIND_HARMLESS))
         second = run_controls(self.change, planter, ModelReviewer(model, name="two"),
                               count=3, kinds=(KIND_BUG, KIND_HARMLESS),
-                              plants=first.plants, altered_requirement=first.altered_requirement)
+                              plants=first.plants, altered_requirement=first.altered_requirement,
+                              points=first.requirement_points)
         self.assertIs(second.plants, first.plants)
+        self.assertEqual(second.requirement_points, first.requirement_points)
+        self.assertEqual(sum(1 for system, _ in model.calls if system == POINTS_SYSTEM), 1)
         self.assertEqual(second.altered_requirement, first.altered_requirement)
         self.assertEqual(sum(1 for system, _ in model.calls if system == PLANT_SYSTEM), 1)
         self.assertEqual(sum(1 for system, _ in model.calls if system == ALTER_SYSTEM), 1)
@@ -221,13 +272,17 @@ class EndToEndTests(unittest.TestCase):
     def test_planted_variants_survive_saving_and_loading(self):
         report, _ = self.run_all()
         path = Path(self.folder.name) / "plants.json"
-        save_plants(path, self.change.id, report.planter, report.plants, report.altered_requirement)
-        plants, altered = load_plants(path, self.change.id)
+        save_plants(path, self.change.id, report.planter, report.plants, report.altered_requirement,
+                    report.requirement_points)
+        plants, altered, points = load_plants(path, self.change.id)
+        self.assertEqual(points, report.requirement_points)
+        self.assertEqual([p.breaks for p in plants], ["R1", "R1", None])
         self.assertEqual([(p.id, p.kind, p.line_start, p.variant_diff) for p in plants],
                          [(p.id, p.kind, p.line_start, p.variant_diff) for p in report.plants])
         self.assertEqual(altered, report.altered_requirement)
         again = run_controls(self.change, ModelPlanter(ScriptedModel(), self.repo, name="p"),
-                             ModelReviewer(ScriptedModel(), name="r"), plants=plants, altered_requirement=altered)
+                             ModelReviewer(ScriptedModel(), name="r"), plants=plants, altered_requirement=altered,
+                             points=points)
         self.assertEqual(summarise(again), summarise(report))
 
     def test_planted_variants_of_another_change_are_refused(self):
@@ -274,6 +329,18 @@ class SmallPieceTests(unittest.TestCase):
         self.assertEqual(answer, {"meets_requirement": False, "findings": []})
         with self.assertRaises(ModelError):
             extract_json("only refs[0] here", accept=lambda value: isinstance(value, dict))
+
+    def test_a_point_called_met_without_lines_is_not_counted_as_met(self):
+        points = [RequirementPoint("R1", "a"), RequirementPoint("R2", "b"), RequirementPoint("R3", "c")]
+        raw = [
+            {"id": "r1", "status": "Met", "evidence": [{"file": "A.cs", "line_start": "7"}], "reason": "x"},
+            {"id": "R2", "status": "met", "evidence": []},
+            {"id": "R9", "status": "met", "evidence": [{"file": "A.cs", "line_start": 1}]},
+        ]
+        parsed = parse_points(raw, points)
+        self.assertEqual([(p.id, p.status) for p in parsed], [("R1", "met"), ("R2", "cannot_tell"), ("R3", "cannot_tell")])
+        self.assertEqual(parsed[0].evidence, [{"file": "A.cs", "line_start": 7, "line_end": 7}])
+        self.assertEqual(parse_points(None, []), [])
 
     def test_locate_trusts_the_quoted_text_over_the_numbers(self):
         lines = ["a", "  b", "c"]

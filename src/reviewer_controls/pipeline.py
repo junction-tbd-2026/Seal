@@ -16,7 +16,7 @@ from .changes import ChangeLoadError, load_change
 from .config import KeysFileInRepoError, MissingKeyError, load_settings, require, reviewer_prefixes, status
 from .controls import run_controls, summarise
 from .llm import ChatClient
-from .models import KIND_BUG, PLANT_KINDS, Plant
+from .models import KIND_BUG, PLANT_KINDS, Plant, RequirementPoint
 from .planter import PLANT_REPLY_TOKENS, ModelPlanter
 from .reviewer import MAX_DIFF_CHARS, MAX_REPLY_TOKENS, ModelReviewer
 from .stats import floor_if_all_caught
@@ -36,7 +36,14 @@ def client_for(settings, prefix: str, debug_dir: Optional[str] = None) -> ChatCl
     )
 
 
-def save_plants(path: Path, change_id: str, planter: str, plants: List[Plant], altered_requirement: Optional[str]) -> None:
+def save_plants(
+    path: Path,
+    change_id: str,
+    planter: str,
+    plants: List[Plant],
+    altered_requirement: Optional[str],
+    points: Optional[List[RequirementPoint]] = None,
+) -> None:
     """Write the planted variants in full, so a later run can test another reviewer on the same ones."""
     path.write_text(
         json.dumps(
@@ -44,6 +51,7 @@ def save_plants(path: Path, change_id: str, planter: str, plants: List[Plant], a
                 "change_id": change_id,
                 "planter": planter,
                 "altered_requirement": altered_requirement or "",
+                "requirement_points": [asdict(point) for point in (points or [])],
                 "plants": [asdict(plant) for plant in plants],
             },
             indent=2,
@@ -59,7 +67,8 @@ def load_plants(path: Path, change_id: str):
     plants = [Plant(**item) for item in data["plants"]]
     if not plants or not all(plant.variant_diff for plant in plants):
         raise ValueError("it holds no complete variants")
-    return plants, (data.get("altered_requirement") or None)
+    points = [RequirementPoint(**item) for item in data.get("requirement_points", [])]
+    return plants, (data.get("altered_requirement") or None), points
 
 
 def whole_number(settings, name: str, default: int) -> int:
@@ -70,7 +79,8 @@ def whole_number(settings, name: str, default: int) -> int:
 
 STEPS = (
     "Load the change and its requirement",
-    "Plant {plants} variants ({kinds})",
+    "Split the requirement into checkable points",
+    "Plant {plants} variants ({kinds}), each breaking one point",
     "Review the real change and every variant blind, each in a fresh session",
     "Match findings to planted locations",
     "Rerun the review with the requirement altered",
@@ -167,9 +177,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Every reviewer is tested on the same planted variants, so the results compare fairly.
     plants = None
     altered = None
+    points = None
     if args.plants_from:
         try:
-            plants, altered = load_plants(Path(args.plants_from), change.id)
+            plants, altered, points = load_plants(Path(args.plants_from), change.id)
         except (OSError, ValueError, KeyError, TypeError) as error:
             print("error: cannot reuse planted variants from {}: {}".format(args.plants_from, error), file=sys.stderr)
             return 2
@@ -180,13 +191,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         report = run_controls(
             change, planter, reviewer,
             count=args.plants, kinds=args.kinds, workers=workers, progress=print,
-            plants=plants, altered_requirement=altered,
+            plants=plants, altered_requirement=altered, points=points,
         )
         plants = report.plants
+        points = report.requirement_points
         altered = report.altered_requirement or altered
         if not plants_saved and plants:
             plants_path = out_dir / "{}__plants__{}.json".format(slug(change.id), report.created_at.replace(":", ""))
-            save_plants(plants_path, change.id, report.planter, plants, altered)
+            save_plants(plants_path, change.id, report.planter, plants, altered, points)
             print("Planted variants saved for reuse: {}".format(plants_path))
             plants_saved = True
 

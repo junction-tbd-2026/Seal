@@ -12,7 +12,7 @@ from typing import Any, List, Optional
 
 from .diffs import render_numbered, split_diff
 from .llm import ChatClient, ModelError, as_int, extract_json
-from .models import Change, Finding, ReviewResult
+from .models import Change, Finding, PointAssessment, RequirementPoint, ReviewResult
 
 MAX_DIFF_CHARS = 120000
 # Room for the reply. Models that think before answering spend part of this on the thinking.
@@ -28,9 +28,15 @@ version of the file; use those numbers. Lines marked "+" were added, lines marke
 Decide whether the change meets the requirement. If you cannot decide something from what you are shown,
 say so instead of guessing.
 
+When requirement points are listed, judge each one separately: "met", "not_met" or "cannot_tell".
+For every point you call met, cite the lines in the change that make it so. A point with no lines to
+show for it is "cannot_tell", not "met".
+
 Reply with JSON only, in this shape:
 {"meets_requirement": true, "findings": [{"file": "path/to/file", "line_start": 10, "line_end": 12,
 "severity": "critical|major|minor", "message": "what is wrong and what it causes"}],
+"points": [{"id": "R1", "status": "met", "evidence": [{"file": "path/to/file", "line_start": 10, "line_end": 12}],
+"reason": "one sentence"}],
 "refused_to_decide": ["a question you could not settle, and why"]}
 Use "meets_requirement": null when you cannot tell. Use an empty list when there are no findings."""
 
@@ -46,6 +52,7 @@ class Reviewer:
         variant_id: str = "original",
         variant_diff: Optional[str] = None,
         requirement_override: Optional[str] = None,
+        points: Optional[List[RequirementPoint]] = None,
     ) -> ReviewResult:
         raise NotImplementedError
 
@@ -92,6 +99,36 @@ def parse_findings(raw: Any) -> List[Finding]:
     return findings
 
 
+def parse_points(raw: Any, points: List[RequirementPoint]) -> List[PointAssessment]:
+    """One assessment per known point, in order. A point the reviewer skipped is "cannot_tell"."""
+    given = {}
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) and item.get("id"):
+                given[str(item["id"]).strip().upper()] = item
+    assessments: List[PointAssessment] = []
+    for point in points:
+        item = given.get(point.id, {})
+        status = str(item.get("status") or "cannot_tell").strip().lower().replace(" ", "_")
+        evidence = []
+        for entry in item.get("evidence") or []:
+            if not isinstance(entry, dict) or not entry.get("file"):
+                continue
+            start = as_int(entry.get("line_start"))
+            if start is None:
+                continue
+            end = as_int(entry.get("line_end"), start) or start
+            evidence.append({"file": str(entry["file"]), "line_start": start, "line_end": max(start, end)})
+        if status not in ("met", "not_met", "cannot_tell"):
+            status = "cannot_tell"
+        if status == "met" and not evidence:
+            status = "cannot_tell"   # a claim with nothing to show for it is not evidence
+        assessments.append(
+            PointAssessment(id=point.id, status=status, evidence=evidence, reason=str(item.get("reason") or "").strip())
+        )
+    return assessments
+
+
 class ModelReviewer(Reviewer):
     """A reviewer reachable through an OpenAI-compatible chat endpoint."""
 
@@ -113,10 +150,19 @@ class ModelReviewer(Reviewer):
         variant_id: str = "original",
         variant_diff: Optional[str] = None,
         requirement_override: Optional[str] = None,
+        points: Optional[List[RequirementPoint]] = None,
     ) -> ReviewResult:
         requirement = requirement_override if requirement_override is not None else change.requirement_text
         diff = variant_diff if variant_diff is not None else change.diff
-        user = "Requirement:\n{}\n\nChange:\n{}".format(requirement.strip(), fit_diff(diff, self.max_diff_chars))
+        # Points describe the original requirement, so they are left out when the requirement is altered.
+        listed = "" if requirement_override is not None else "".join(
+            "\n{}: {}".format(point.id, point.text) for point in (points or [])
+        )
+        user = "Requirement:\n{}\n{}\nChange:\n{}".format(
+            requirement.strip(),
+            "\nRequirement points:{}\n".format(listed) if listed else "",
+            fit_diff(diff, self.max_diff_chars),
+        )
         result = ReviewResult(reviewer=self.name, variant_id=variant_id)
         try:
             response = self.client.complete(REVIEW_SYSTEM, user, temperature=0.0, max_tokens=self.max_tokens)
@@ -136,6 +182,7 @@ class ModelReviewer(Reviewer):
         verdict = reply.get("meets_requirement")
         result.meets_requirement = verdict if isinstance(verdict, bool) else None
         result.findings = parse_findings(reply.get("findings"))
+        result.points = parse_points(reply.get("points"), points or [])
         refused = reply.get("refused_to_decide")
         if isinstance(refused, list):
             result.refused_to_decide = [str(item).strip() for item in refused if str(item).strip()]

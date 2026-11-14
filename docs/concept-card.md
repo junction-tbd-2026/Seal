@@ -5,11 +5,20 @@
 
 ## Recommendation
 
-Do not ask a human to trust an AI reviewer's "looks good". Test the reviewer
-on the change in front of it, every time: plant known defects in copies of the
-change and see which ones it catches. Give the named owner a one-page card
-with the reviewer's findings, what it demonstrably missed, and the exact lines
-to read personally. The owner signs the card, not the diff.
+**Every claim points at evidence, and every approval is tested: the AI's and
+the human's.**
+
+1. Split the requirement into a few checkable points. The AI reviewer must
+   say, for each point, whether the change meets it and which lines show it.
+   A point with nothing to show for it is "cannot tell", not "met".
+2. Test the reviewer on this exact change. Break each point in a copy of the
+   change and see whether the reviewer notices. Its "met" counts only where
+   it noticed.
+3. Test the person who signs. Now and then the code shown for sign-off is one
+   of those broken copies. Accepting it is recorded, and nothing is approved.
+
+The named owner signs what is left: the points, the evidence, and the spots
+where nobody has shown the reviewer can see.
 
 Line-by-line human review of everything is the wrong default. Line-by-line
 review of the places where the AI reviewer proved blind is the right one.
@@ -17,7 +26,8 @@ review of the places where the AI reviewer proved blind is the right one.
 ## Principles
 
 1. **Trust comes from evidence about this change,** not from the reviewer's
-   confidence or its score on someone else's benchmark.
+   confidence or its score on someone else's benchmark. Evidence is tied to a
+   requirement point and to specific lines.
 2. **A named human owns every decision.** The AI review is advice with
    evidence. It is never the approval.
 3. **Measure both ways.** Planted bugs and omissions measure what the reviewer
@@ -31,25 +41,32 @@ review of the places where the AI reviewer proved blind is the right one.
    are written by a different model.
 7. **Refusing to decide is a valid answer.** What the reviewer could not
    settle, and what nobody checked, is listed on the card.
+8. **An approval nobody tested is a rubber stamp.** The same instrument that
+   measures the AI reviewer measures the human signer. Airports do this to
+   their screeners. It is an announced policy, never a secret one.
 
 ## How it runs in a pull-request flow
 
 1. An AI agent opens a pull request against a requirement.
-2. The check starts automatically. A planter model writes small edits to the
-   changed lines: bugs, omissions and harmless rewrites.
-3. The AI reviewer reviews the real change and every planted copy, blind.
-4. Findings are matched to the planted locations and scored.
+2. The check starts automatically. The requirement is split into points.
+3. A planter model writes small edits to the changed lines: bugs, omissions
+   and harmless rewrites. Each bug or omission is aimed at one point.
+4. The AI reviewer judges each point on the real change and on every planted
+   copy, blind. A planted defect is caught when the reviewer flags the spot or
+   stops calling that point met.
 5. The review is rerun with the requirement altered. If the verdict does not
    move, the reviewer was not checking against the requirement.
 6. The pull request gets a status and a link, for example "caught 1 of 3
    planted defects, 2 places need a human".
 7. The owner opens the link, reads the marked lines, and signs: accept,
-   reject, or send for a full read.
+   reject, or send for a full read. The first copy shown may be a spot-check.
 
 ## What the owner signs
 
 | On the card | Source |
 |---|---|
+| Each requirement point: met, not met or cannot tell, with the lines cited | The review |
+| For each point, whether the reviewer noticed when it was broken | The planted copies |
 | What the reviewer found in the real change, and its verdict against the requirement | The review |
 | How many planted defects it caught, as a range | The planted copies |
 | How many harmless rewrites it wrongly reported | The planted copies |
@@ -73,6 +90,7 @@ gets, and it is withdrawn when a real defect escapes.
 | Share routed to humans | Lines marked "read yourself" as a share of changed lines |
 | Reverts and incidents do not rise as review time falls | Escapes are logged against the area and lower its trust; planted-catch rate must stay above the area's floor |
 | Time to merge | Time from pull request to signature, recorded on the card |
+| Humans stay accountable | Share of spot-check copies each signer refuses; an accepted copy is logged with the time taken |
 
 ## Depth follows risk
 
@@ -95,6 +113,19 @@ Thirty supports "at least 90%". The tier sets the number.
 - **Noise versus coverage.** A stricter reviewer catches more and raises more
   false alarms. The harmless rewrites make that visible instead of hidden.
 
+## Strength of evidence
+
+| Strength | Evidence | Here |
+|---|---|---|
+| Weakest | An AI's opinion | Yes |
+| | That opinion with a measured error rate | Yes |
+| | A claim tied to a requirement point and to lines | Yes |
+| | Something that runs: tests pass with the change and fail without it | Not yet |
+| Strongest | An attack that tried to break the change and failed, on record | Not yet |
+
+The two missing rungs need the code built and run. They are the next step,
+not a different idea: the planted copies become the test of the attacker.
+
 ## Limits
 
 - It never proves a change is correct. It tells you where the reviewer's
@@ -104,6 +135,10 @@ Thirty supports "at least 90%". The tier sets the number.
 - If the planter and the reviewer share a blind spot, that class of defect is
   never planted and never missed.
 - A per-change result rests on few samples. Treat it as a gate, not a grade.
+- The requirement points are written by a model. A wrong or missing point
+  goes unnoticed unless the owner reads the requirement.
+- Spot-checking people only works as an agreed practice. Done covertly it
+  costs more trust than it earns.
 
 ## Results and failure modes
 
