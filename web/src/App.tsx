@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { DiffView, type Mark } from "./DiffView";
-import { Evidence } from "./Evidence";
-import { fetchPulls, fetchReview, fileName, postSignOff, prettyModel } from "./lib";
+import { fetchPulls, fetchReview, postSignOff } from "./lib";
+import { clearSaved, codeFingerprint, readSaved, storageKey } from "./progress";
 import { Prose } from "./Prose";
-import { RequirementTable } from "./RequirementTable";
 import { SpotCheckReveal } from "./SpotCheck";
-import type { EvidenceRef, Exam, Plant, Pull, PullList, PullStatus, Reviewer, SignOff, SignResult, SpotVerdict } from "./types";
+import type { Exam, Pull, PullList, PullStatus, Reviewer, SignOff, SignResult, SpotVerdict } from "./types";
+import { Workspace } from "./Workspace";
 
 const PRODUCT_NAME = "Reviewer Controls";
 
-const STATUS: Record<PullStatus, { label: (pull: Pull) => string; chip: string }> = {
+const STATUS: Record<PullStatus, { label: (pull: Pull) => string; chip: string | ((pull: Pull) => string) }> = {
   needs_you: {
     label: (pull) => `${pull.lines_to_read} ${pull.lines_to_read === 1 ? "spot" : "spots"} to check yourself`,
     chip: "bg-missed text-white",
   },
-  clear: { label: () => "Ready to sign", chip: "bg-caught text-white" },
+  // "Ready to sign" would be wrong here: the steps come first, whatever the reviewer caught.
+  clear: {
+    label: (pull) => (pull.planted_defects ? "Reviewer missed nothing we planted" : "Reviewer could not be tested"),
+    chip: (pull) => (pull.planted_defects ? "bg-caught text-white" : "bg-warn text-ink"),
+  },
   signed: {
     label: (pull) =>
       `${{ accept: "Accepted", reject: "Rejected", full_read: "Sent for full read" }[pull.signed?.decision ?? ""] ?? "Signed"} by ${pull.signed?.name ?? "someone"}`,
@@ -44,19 +47,18 @@ function summarise(reviewer: Reviewer): string {
       : " The reviewer could not be tested on this change.";
   const todo =
     spots > 0
-      ? ` Check the ${spots} red ${spots === 1 ? "spot" : "spots"} yourself before you sign.`
+      ? ` The steps take you through every point, and the ${spots} red ${spots === 1 ? "spot" : "spots"} it missed need your own check.`
       : total > 0
-        ? " It missed nothing, so there is nothing extra to check."
+        ? " It missed nothing we planted. The steps still take you through every point before you sign."
         : " Treat the change as unreviewed.";
   return said + tested + todo;
 }
 
-function sameFile(a: string, b: string): boolean {
-  return a === b || a.endsWith("/" + b) || b.endsWith("/" + a);
-}
-
 function PullItem({ pull, active, onSelect }: { pull: Pull; active: boolean; onSelect: () => void }) {
   const status = STATUS[pull.status];
+  const chip = typeof status.chip === "string" ? status.chip : status.chip(pull);
+  // A review this person started here and has not signed yet.
+  const saved = pull.status === "needs_you" || pull.status === "clear" ? readSaved(storageKey(pull.change_id, pull.reviewers[0] ?? "")) : null;
   return (
     <button
       type="button"
@@ -73,7 +75,15 @@ function PullItem({ pull, active, onSelect }: { pull: Pull; active: boolean; onS
         <span>{pull.files} files</span>
       </span>
       <span className="mt-1 block text-[14px] font-bold leading-snug">{pull.title}</span>
-      <span className={`mt-2 inline-block rounded border-2 border-ink px-1.5 py-px text-[11px] font-bold ${status.chip}`}>{status.label(pull)}</span>
+      <span className={`mt-2 inline-block rounded border-2 border-ink px-1.5 py-px text-[11px] font-bold ${chip}`}>{status.label(pull)}</span>
+      {saved && saved.done > 0 && saved.total > 0 && (
+        <span className="mt-2 flex items-center gap-2 text-[11.5px] font-bold">
+          <span className="h-2 flex-1 overflow-hidden rounded-sm border-2 border-ink bg-panel" aria-hidden="true">
+            <span className="block h-full bg-ink" style={{ width: `${Math.round((saved.done / saved.total) * 100)}%` }} />
+          </span>
+          Your review: {saved.done} of {saved.total} steps
+        </span>
+      )}
     </button>
   );
 }
@@ -84,15 +94,13 @@ export default function App() {
   const [exam, setExam] = useState<Exam | null>(null);
   const [loadingExam, setLoadingExam] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filePath, setFilePath] = useState<string | null>(null);
   const [reviewerName, setReviewerName] = useState<string | null>(null);
   const [signoffs, setSignoffs] = useState<SignOff[]>([]);
-  const [focus, setFocus] = useState<{ line: number; token: number } | null>(null);
-  const [cited, setCited] = useState<{ pointId: string; evidence: EvidenceRef } | null>(null);
   const [showRequirement, setShowRequirement] = useState(false);
-  const [visited, setVisited] = useState<Set<string>>(new Set());
-  const [verdicts, setVerdicts] = useState<Record<string, SpotVerdict>>({});
-  const [showPoints, setShowPoints] = useState(true);
+  const [compare, setCompare] = useState(false);
+  // Saved checks live in the browser, not in state: this redraws the list when they change.
+  const [, setSavedTick] = useState(0);
+  const onSaved = useCallback(() => setSavedTick((tick) => tick + 1), []);
   const [reveal, setReveal] = useState<{ result: Extract<SignResult, { spot_check: true }>; name: string } | null>(null);
 
   const loadPulls = useCallback(
@@ -118,12 +126,7 @@ export default function App() {
       .then((data) => {
         setExam(data);
         setSignoffs(data.signoffs);
-        if (!keepView) {
-          setReviewerName(data.reviewers[0]?.name ?? null);
-          // Open on the file the planted edits live in: that is the one worth reading.
-          const planted = data.plants[0]?.file;
-          setFilePath(data.change.files.find((file) => file.path === planted)?.path ?? data.change.files[0]?.path ?? null);
-        }
+        if (!keepView) setReviewerName(data.reviewers[0]?.name ?? null);
       })
       .catch((problem: Error) => setError(problem.message))
       .finally(() => setLoadingExam(false));
@@ -132,52 +135,19 @@ export default function App() {
   useEffect(() => {
     if (!pull) return;
     setExam(null);
-    setFocus(null);
-    setCited(null);
-    setVisited(new Set());
-    setVerdicts({});
     setShowRequirement(false);
+    setCompare(false);
     if (pull.status !== "untested") void loadReview(pull.change_id, false);
     // Reload only when a different pull request is opened.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pull?.change_id, pull?.status === "untested"]);
 
   const reviewer = exam?.reviewers.find((item) => item.name === reviewerName) ?? exam?.reviewers[0] ?? null;
-  const file = exam?.change.files.find((item) => item.path === filePath) ?? null;
+  // Saved checks belong to the code they were made on. A spot-check copy and the real change differ here.
+  const code = useMemo(() => (exam ? codeFingerprint(exam.change.files) : ""), [exam]);
 
-  const marks = useMemo<Mark[]>(() => {
-    if (!exam || !reviewer || !file) return [];
-    const blind: Mark[] = exam.plants
-      .filter((plant) => reviewer.read_yourself.includes(plant.id) && plant.file === file.path)
-      .map((plant) => ({ start: plant.line_start, end: plant.line_end, tone: "blind" }));
-    const found: Mark[] = reviewer.findings
-      .filter((finding) => sameFile(file.path, finding.file))
-      .map((finding) => ({ start: finding.line_start, end: finding.line_end, tone: "finding" }));
-    const evidence: Mark[] =
-      cited && sameFile(file.path, cited.evidence.file)
-        ? [{ start: cited.evidence.line_start, end: cited.evidence.line_end, tone: "evidence", label: `Cited for ${cited.pointId}` }]
-        : [];
-    return [...blind, ...found, ...evidence];
-  }, [exam, reviewer, file, cited]);
-
-  const jumpToPlant = (plant: Plant) => {
-    setVisited((current) => new Set(current).add(plant.id));
-    setCited(null);
-    setFilePath(plant.file);
-    setFocus({ line: plant.line_start, token: Date.now() });
-  };
-
-  const jumpToEvidence = (pointId: string, evidence: EvidenceRef) => {
-    const target = exam?.change.files.find((item) => sameFile(item.path, evidence.file));
-    if (!target) return;
-    setCited({ pointId, evidence });
-    setFilePath(target.path);
-    setFocus({ line: evidence.line_start, token: Date.now() });
-  };
-
-  const sign = async (name: string, decision: string) => {
+  const sign = async (name: string, decision: string, spots: { plant_id: string; verdict: SpotVerdict }[]) => {
     if (!exam?.session || !reviewer) throw new Error("This review session has ended. Reload the pull request.");
-    const spots = reviewer.read_yourself.filter((id) => verdicts[id]).map((id) => ({ plant_id: id, verdict: verdicts[id] }));
     const result = await postSignOff({ session: exam.session, reviewer: reviewer.name, name, decision, spots });
     if (result.spot_check) {
       setReveal({ result, name: name.trim() });
@@ -190,9 +160,10 @@ export default function App() {
 
   const continueAfterReveal = () => {
     setReveal(null);
-    setVisited(new Set());
-    setVerdicts({});
-    if (exam) void loadReview(exam.change.id, true);
+    if (!exam) return;
+    // Those checks were made on the planted copy. The real change starts from nothing.
+    exam.reviewers.forEach((item) => clearSaved(storageKey(exam.change.id, item.name)));
+    void loadReview(exam.change.id, true);
   };
 
   if (error) {
@@ -297,9 +268,20 @@ export default function App() {
         ) : !exam || !reviewer ? (
           <p className="p-10 text-soft">{loadingExam ? "Loading the review…" : "No review to show."}</p>
         ) : (
-          <div className="grid h-full grid-cols-[minmax(0,1fr)_23rem]">
-            <section className="flex min-h-0 min-w-0 flex-col">
-              <div className="border-b-2 border-ink bg-panel px-5 py-3">
+          <Workspace
+            key={`${exam.change.id}|${reviewer.run_file}|${code}`}
+            exam={exam}
+            reviewer={reviewer}
+            code={code}
+            signoffs={signoffs}
+            summary={summarise(reviewer)}
+            compare={compare}
+            onCompare={() => setCompare(true)}
+            onReviewer={setReviewerName}
+            onSign={sign}
+            onSaved={onSaved}
+            header={
+              <div className="border-b-2 border-ink bg-canvas px-5 py-2.5">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-bold uppercase tracking-[0.1em] text-soft">
                   <a href={pull.url} target="_blank" rel="noreferrer" className="underline decoration-2 underline-offset-2 hover:text-ink">
                     Pull request #{pull.number}
@@ -321,81 +303,14 @@ export default function App() {
                   </button>
                 </div>
                 <h1 className="mt-1 text-[21px] font-extrabold leading-tight tracking-tight">{exam.change.requirement_title}</h1>
-                <p className="mt-2 max-w-4xl rounded-md border-2 border-ink bg-warn-wash px-3 py-1.5 text-[13.5px] font-medium leading-snug">{summarise(reviewer)}</p>
                 {showRequirement && (
-                  <div className="thin-scroll mt-2 max-h-56 overflow-y-auto rounded-md border-2 border-ink bg-canvas px-4 py-2">
+                  <div className="thin-scroll mt-2 max-h-56 overflow-y-auto rounded-md border-2 border-ink bg-panel px-4 py-2">
                     <Prose text={requirementBody} />
                   </div>
                 )}
               </div>
-
-              <button
-                type="button"
-                onClick={() => setShowPoints(!showPoints)}
-                aria-expanded={showPoints}
-                className="flex items-center justify-between border-b-2 border-ink bg-canvas px-5 py-1 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-soft hover:text-ink"
-              >
-                <span>The requirement, point by point ({reviewer.points.length})</span>
-                <span>{showPoints ? "Hide" : "Show"}</span>
-              </button>
-              {showPoints && <RequirementTable reviewer={reviewer} selected={cited?.pointId ?? null} onEvidence={jumpToEvidence} />}
-
-              <div className="thin-scroll flex gap-1.5 overflow-x-auto border-b-2 border-ink bg-canvas px-3 py-2" role="tablist" aria-label="Files in this change">
-                {exam.change.files.map((item) => {
-                  const toRead = exam.plants.filter((plant) => plant.file === item.path && reviewer.read_yourself.includes(plant.id)).length;
-                  const active = item.path === file?.path;
-                  return (
-                    <button
-                      key={item.path}
-                      role="tab"
-                      type="button"
-                      aria-selected={active}
-                      title={item.path}
-                      onClick={() => {
-                        setFilePath(item.path);
-                        setFocus(null);
-                      }}
-                      className={`flex shrink-0 items-center gap-1.5 rounded-md border-2 border-ink px-2.5 py-1 font-mono text-[12px] font-bold ${
-                        active ? "bg-ink text-white" : "bg-panel hover:bg-brand-wash"
-                      }`}
-                    >
-                      {fileName(item.path)}
-                      {toRead > 0 && <span className="rounded-sm bg-missed px-1 font-sans text-[10.5px] text-white">{toRead}</span>}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {file && <DiffView file={file} marks={marks} focus={focus?.line ?? null} key={`${file.path}-${focus?.token ?? 0}`} className="min-h-0 flex-1" />}
-
-              <p className="border-t-2 border-ink bg-panel px-5 py-2 text-[12px] text-soft">
-                <span className="mr-1.5 inline-block h-3 w-1.5 translate-y-0.5 bg-missed" />
-                <strong className="text-ink">Red is not a known bug.</strong> {prettyModel(reviewer.name)} failed to notice when we broke the code there, so check it yourself.
-                <span className="ml-3 mr-1.5 inline-block h-3 w-1.5 translate-y-0.5 bg-brand" />
-                Blue: lines the reviewer cites as evidence.
-                <span className="ml-3 mr-1.5 inline-block h-3 w-1.5 translate-y-0.5 bg-warn" />
-                Yellow: a problem the reviewer reported.
-              </p>
-            </section>
-
-            <Evidence
-              key={exam.change.id}
-              exam={exam}
-              reviewer={reviewer}
-              onReviewer={(name) => {
-                setReviewerName(name);
-                setVisited(new Set());
-                setVerdicts({});
-                setCited(null);
-              }}
-              signoffs={signoffs}
-              visited={visited}
-              verdicts={verdicts}
-              onVerdict={(plantId, verdict) => setVerdicts((current) => ({ ...current, [plantId]: verdict }))}
-              onSign={sign}
-              onJump={jumpToPlant}
-            />
-          </div>
+            }
+          />
         )}
       </main>
 
