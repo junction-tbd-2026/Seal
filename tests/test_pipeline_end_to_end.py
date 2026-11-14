@@ -16,6 +16,7 @@ from reviewer_controls.controls import run_controls, summarise
 from reviewer_controls.diffs import render_numbered, split_diff
 from reviewer_controls.llm import ChatResponse, ModelError, extract_json
 from reviewer_controls.models import KIND_BUG, KIND_HARMLESS
+from reviewer_controls.pipeline import load_plants, save_plants
 from reviewer_controls.planter import ALTER_SYSTEM, PLANT_SYSTEM, ModelPlanter, allocate, candidate_files, locate
 from reviewer_controls.reviewer import REVIEW_SYSTEM, ModelReviewer, fit_diff
 
@@ -216,6 +217,25 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(sum(1 for system, _ in model.calls if system == ALTER_SYSTEM), 1)
         self.assertEqual(summarise(second), summarise(first))
         self.assertEqual(second.reviewer, "two")
+
+    def test_planted_variants_survive_saving_and_loading(self):
+        report, _ = self.run_all()
+        path = Path(self.folder.name) / "plants.json"
+        save_plants(path, self.change.id, report.planter, report.plants, report.altered_requirement)
+        plants, altered = load_plants(path, self.change.id)
+        self.assertEqual([(p.id, p.kind, p.line_start, p.variant_diff) for p in plants],
+                         [(p.id, p.kind, p.line_start, p.variant_diff) for p in report.plants])
+        self.assertEqual(altered, report.altered_requirement)
+        again = run_controls(self.change, ModelPlanter(ScriptedModel(), self.repo, name="p"),
+                             ModelReviewer(ScriptedModel(), name="r"), plants=plants, altered_requirement=altered)
+        self.assertEqual(summarise(again), summarise(report))
+
+    def test_planted_variants_of_another_change_are_refused(self):
+        report, _ = self.run_all()
+        path = Path(self.folder.name) / "plants.json"
+        save_plants(path, "some-other-change", report.planter, report.plants, None)
+        with self.assertRaises(ValueError):
+            load_plants(path, self.change.id)
 
     def test_reviewer_diff_budget_is_respected(self):
         model = ScriptedModel()

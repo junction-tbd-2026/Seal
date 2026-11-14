@@ -6,6 +6,7 @@ import argparse
 import json
 import re
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from typing import List, Optional
 
@@ -15,7 +16,7 @@ from .changes import ChangeLoadError, load_change
 from .config import KeysFileInRepoError, MissingKeyError, load_settings, require, reviewer_prefixes, status
 from .controls import run_controls, summarise
 from .llm import ChatClient
-from .models import KIND_BUG, PLANT_KINDS
+from .models import KIND_BUG, PLANT_KINDS, Plant
 from .planter import PLANT_REPLY_TOKENS, ModelPlanter
 from .reviewer import MAX_DIFF_CHARS, MAX_REPLY_TOKENS, ModelReviewer
 from .stats import floor_if_all_caught
@@ -33,6 +34,32 @@ def client_for(settings, prefix: str, debug_dir: Optional[str] = None) -> ChatCl
         timeout=float(whole_number(settings, prefix + "_TIMEOUT_SECONDS", 600)),
         debug_dir=debug_dir,
     )
+
+
+def save_plants(path: Path, change_id: str, planter: str, plants: List[Plant], altered_requirement: Optional[str]) -> None:
+    """Write the planted variants in full, so a later run can test another reviewer on the same ones."""
+    path.write_text(
+        json.dumps(
+            {
+                "change_id": change_id,
+                "planter": planter,
+                "altered_requirement": altered_requirement or "",
+                "plants": [asdict(plant) for plant in plants],
+            },
+            indent=2,
+        )
+    )
+
+
+def load_plants(path: Path, change_id: str):
+    """Read planted variants saved by an earlier run of the same change."""
+    data = json.loads(path.read_text())
+    if data["change_id"] != change_id:
+        raise ValueError("it holds variants of {}, not {}".format(data["change_id"], change_id))
+    plants = [Plant(**item) for item in data["plants"]]
+    if not plants or not all(plant.variant_diff for plant in plants):
+        raise ValueError("it holds no complete variants")
+    return plants, (data.get("altered_requirement") or None)
 
 
 def whole_number(settings, name: str, default: int) -> int:
@@ -68,6 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repo", help="path to the sample repository (default: {})".format(DEFAULT_REPO))
     parser.add_argument("--requirements-dir", default="requirements", help="folder of requirement files")
     parser.add_argument("--out", default="results", help="folder for the run report and card")
+    parser.add_argument(
+        "--plants-from", metavar="FILE",
+        help="reuse the planted variants saved by an earlier run (a *__plants__*.json file) instead of planting new ones",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the plan and settings status, then exit")
     parser.add_argument(
         "--debug", action="store_true",
@@ -136,6 +167,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Every reviewer is tested on the same planted variants, so the results compare fairly.
     plants = None
     altered = None
+    if args.plants_from:
+        try:
+            plants, altered = load_plants(Path(args.plants_from), change.id)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            print("error: cannot reuse planted variants from {}: {}".format(args.plants_from, error), file=sys.stderr)
+            return 2
+    plants_saved = bool(args.plants_from)
     lines = []
     for reviewer, workers in reviewers:
         print("--- Reviewer: {}".format(reviewer.name))
@@ -146,8 +184,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         plants = report.plants
         altered = report.altered_requirement or altered
+        if not plants_saved and plants:
+            plants_path = out_dir / "{}__plants__{}.json".format(slug(change.id), report.created_at.replace(":", ""))
+            save_plants(plants_path, change.id, report.planter, plants, altered)
+            print("Planted variants saved for reuse: {}".format(plants_path))
+            plants_saved = True
 
-        stem = "{}__{}__{}".format(slug(change.id), slug(report.reviewer), report.created_at.replace(":", ""))
+        stem ="{}__{}__{}".format(slug(change.id), slug(report.reviewer), report.created_at.replace(":", ""))
         card_path = out_dir / (stem + ".card.md")
         (out_dir / (stem + ".json")).write_text(json.dumps(report.to_dict(), indent=2))
         card_path.write_text(render_card(report))
