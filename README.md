@@ -60,10 +60,17 @@ A working prototype with two parts.
 
 **2. A web page where the accountable person signs.**
 
-- A list of pull requests. Each one opens as an audit of its AI review, in
-  steps: first how the AI reviewer did on our test, then one step per
-  review objective, then the sign-off. (A review objective is one of the
-  checkable points the requirement, the issue, was split into.)
+- A landing page lists the pull requests in the middle of the screen. One
+  that is ready opens as an audit of its AI review, in steps: first how the
+  AI reviewer did on our test, then one step per review objective, then the
+  sign-off. (A review objective is one of the checkable points the
+  requirement, the issue, was split into.) A menu at the top switches
+  between pull requests during an audit.
+- After the sign-off the page goes back to the list. The signed pull request
+  moves to the bottom, greyed, with a green, red or amber border for
+  accepted, rejected or sent for a full read, and it cannot be opened again.
+  A pull request whose AI check has no results yet shows a spinner and
+  cannot be opened either.
 - Each objective step states three things in the side bar: what the AI
   reviewer claims, how that claim did on our test, and what the person must
   do. The panel shows the change file by file: the lines the AI reviewer
@@ -111,8 +118,8 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
   In `results/` now: pull requests #1 and #2 with both reviewers, and pull
   request #3 with Nemotron only. In these saved runs the second reviewer is
   still Gemma; reruns use Gemini and replace them. Missing: pull request #3
-  with the second reviewer, and pull request #4, which shows as "Not tested
-  yet" on the page.
+  with the second reviewer, and pull request #4, which shows as "AI check
+  running" on the page.
 - To finish them (needs keys, see below), run the pipeline for
   `ju26-issue-2129` and `ju26-issue-2297`, then regenerate the summary with
   `scripts/summarise_results.py` and commit `results/` and `docs/results.md`.
@@ -124,8 +131,8 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
   reused: the whole run took about 2 minutes (it took about 5.5 before the
   one-round change), Nemotron's part about 75 seconds. Planting new copies
   adds the planter's time on top.
-- Not started: running the planted copies (Modal), the product name, the
-  video, the public repository.
+- Not started: running the planted copies (Modal), the video, the public
+  repository.
 
 ## Next steps
 
@@ -135,8 +142,11 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
 2. **Finish the reruns** on all four sample changes with the current version
    and regenerate the results summary.
 3. **Start a check from the pull request.** Today a check is started from
-   the command line. It should start when a pull request opens and post its
-   status back to it.
+   the command line. It should start on a server when a pull request opens
+   and post its status back to it. Until then the page cannot tell a check
+   that is running from one that never started: every pull request without
+   results shows as "AI check running", and the list asks again every few
+   seconds so it opens once results arrive.
 4. **Keep a track record.** Pool results per reviewer, per code area and per
    kind of defect, so the amount of human review follows measured trust.
 5. **Submission.** Product name, two-minute video, public repository, and

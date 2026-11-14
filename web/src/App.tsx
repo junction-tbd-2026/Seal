@@ -1,30 +1,12 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, BotIcon, CheckIcon, ChevronDown, PanelIcon, PullIcon, RepoIcon, XIcon } from "./icons";
+import { ArrowLeft, ArrowUpRight, BotIcon, CheckIcon, ChevronDown, PanelIcon, PullIcon, XIcon } from "./icons";
 import { fetchPulls, fetchReview, postSignOff, prettyModel } from "./lib";
-import { clearSaved, codeFingerprint, readSaved, storageKey } from "./progress";
+import { clearSaved, codeFingerprint, storageKey } from "./progress";
+import { Landing, PullGroups, SpotNote, pullKind } from "./Pulls";
 import { SpotCheckReveal } from "./SpotCheck";
-import type { Exam, Pull, PullList, PullStatus, SignOff, SignResult, SpotVerdict } from "./types";
+import type { Exam, PullList, SignOff, SignResult, SpotVerdict } from "./types";
 import { Workspace } from "./Workspace";
-
-/** One short line on where a pull request stands, and the colour of its dot. */
-const STATUS: Record<PullStatus, { label: (pull: Pull) => string; dot: (pull: Pull) => string }> = {
-  needs_you: {
-    label: (pull) => `AI reviewer missed planted mistakes at ${pull.lines_to_read} ${pull.lines_to_read === 1 ? "line" : "lines"}`,
-    dot: () => "bg-missed",
-  },
-  // Not "ready to sign": the steps come first, whatever the reviewer caught.
-  clear: {
-    label: (pull) => (pull.planted_defects ? "AI reviewer noticed every planted mistake" : "AI reviewer could not be tested"),
-    dot: (pull) => (pull.planted_defects ? "bg-caught" : "bg-warn"),
-  },
-  signed: {
-    label: (pull) =>
-      `${{ accept: "Accepted", reject: "Rejected", full_read: "Sent for full read" }[pull.signed?.decision ?? ""] ?? "Signed"} by ${pull.signed?.name ?? "someone"}`,
-    dot: () => "bg-ink",
-  },
-  untested: { label: () => "Not tested yet", dot: () => "border-[1.5px] border-faint" },
-};
 
 /** A button that opens a small menu under itself. Closes on a click outside, on Escape, and after a choice. */
 function Dropdown({
@@ -77,11 +59,20 @@ function Dropdown({
   );
 }
 
-/** The name and the seal. The seal wiggles when pointed at, because it can. */
-function Brand() {
+/** How often the list asks again while an AI check is running. */
+const POLL_MS = 8000;
+
+/** The pull request named in the address (?pr=2), so the back button and a reload keep the place. */
+function pullInAddress(): number | null {
+  const number = Number(new URLSearchParams(window.location.search).get("pr"));
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
+/** The name and the seal, which lead back to the list. The seal wiggles when pointed at, because it can. */
+function Brand({ onHome }: { onHome: () => void }) {
   const reduced = useReducedMotion() ?? false;
   return (
-    <span className="flex shrink-0 items-center gap-2 pl-1 pr-0.5">
+    <button type="button" onClick={onHome} title="All pull requests" className="flex shrink-0 items-center gap-2 rounded-lg py-0.5 pl-1 pr-1.5 hover:bg-subtle">
       <motion.img
         src="/seal.svg"
         alt=""
@@ -92,87 +83,15 @@ function Brand() {
         transition={{ duration: 0.6 }}
       />
       <span className="hidden text-[15.5px] font-semibold tracking-[-0.01em] sm:inline">Seal</span>
-    </span>
-  );
-}
-
-/** One pull request in a list: number, title, where it stands, and how far this person got. */
-function PullRow({ pull, active, inMenu, onSelect }: { pull: Pull; active: boolean; inMenu: boolean; onSelect: () => void }) {
-  const status = STATUS[pull.status];
-  // A review this person started here and has not signed yet.
-  const saved = pull.status === "needs_you" || pull.status === "clear" ? readSaved(storageKey(pull.change_id, pull.reviewers[0] ?? "")) : null;
-  const started = saved != null && saved.done > 0 && saved.total > 0;
-  const detail = started ? `Your audit: ${saved.done} of ${saved.total} steps done` : status.label(pull);
-  return (
-    <button
-      type="button"
-      role={inMenu ? "menuitem" : undefined}
-      onClick={onSelect}
-      aria-current={active ? "true" : undefined}
-      className={`relative w-full rounded-lg px-3 py-2 text-left ${active ? "bg-canvas" : "hover:bg-canvas"}`}
-    >
-      <span className="flex items-start gap-2">
-        <i className={`mt-[7px] inline-block h-2 w-2 shrink-0 rounded-full ${status.dot(pull)}`} aria-hidden="true" />
-        <span className="shrink-0 text-[13px] font-medium leading-[21px] text-soft">#{pull.number}</span>
-        <span className="line-clamp-2 min-w-0 text-[14px] font-medium leading-[21px]">{pull.title}</span>
-        {active && <CheckIcon size={14} className="ml-auto mt-[4px] shrink-0 text-soft" />}
-      </span>
-      <span className="mt-0.5 line-clamp-2 block pl-4 text-[12.5px] leading-snug text-soft">{detail}</span>
-      {started && (
-        <span className="ml-4 mt-1.5 block h-[3px] overflow-hidden rounded-full bg-black/[0.08]" aria-hidden="true">
-          <span className="block h-full rounded-full bg-done" style={{ width: `${Math.round((saved.done / saved.total) * 100)}%` }} />
-        </span>
-      )}
     </button>
-  );
-}
-
-function PullGroups({ pulls, selected, inMenu = false, onSelect }: { pulls: PullList; selected: number | null; inMenu?: boolean; onSelect: (number: number) => void }) {
-  const groups: [string, Pull[]][] = [
-    ["Waiting for your audit", pulls.pull_requests.filter((item) => item.status === "needs_you" || item.status === "clear")],
-    ["Signed", pulls.pull_requests.filter((item) => item.status === "signed")],
-    ["Not tested yet", pulls.pull_requests.filter((item) => item.status === "untested")],
-  ];
-  return (
-    <div className="space-y-3">
-      {groups.map(
-        ([title, items]) =>
-          items.length > 0 && (
-            <div key={title}>
-              <p className="px-3 pb-1 pt-1 text-[12.5px] text-soft">
-                {title} · {items.length}
-              </p>
-              {items.map((item) => (
-                <PullRow key={item.number} pull={item} active={item.number === selected} inMenu={inMenu} onSelect={() => onSelect(item.number)} />
-              ))}
-            </div>
-          ),
-      )}
-    </div>
-  );
-}
-
-function SpotNote({ pulls }: { pulls: PullList }) {
-  const spot = pulls.spot_checks;
-  return (
-    <div className="space-y-1.5 px-3 text-[12.5px] leading-snug text-soft">
-      {spot.enabled && (
-        <p title="Now and then the code shown for sign-off is a copy with a planted mistake. Accepting it is recorded.">
-          {spot.rate != null && spot.rate < 1 ? `About ${Math.round(spot.rate * 100)}% of first sign-offs are spot-checks.` : "Sign-offs are spot-checked."}
-          {spot.checked > 0 && ` People caught ${spot.caught} of ${spot.checked}.`}
-        </p>
-      )}
-      <a href={pulls.repository_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 font-mono text-[12px] hover:text-ink" title="The repository this tool is watching">
-        <RepoIcon size={13} />
-        {pulls.repository}
-      </a>
-    </div>
   );
 }
 
 export default function App() {
   const [pulls, setPulls] = useState<PullList | null>(null);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(pullInAddress);
+  /** The pull request signed last, so the list can show it settling at the bottom. */
+  const [justSigned, setJustSigned] = useState<number | null>(null);
   const [exam, setExam] = useState<Exam | null>(null);
   const [loadingExam, setLoadingExam] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -190,10 +109,7 @@ export default function App() {
   const loadPulls = useCallback(
     () =>
       fetchPulls()
-        .then((list) => {
-          setPulls(list);
-          setSelected((current) => current ?? list.pull_requests.find((pull) => pull.status !== "untested")?.number ?? list.pull_requests[0]?.number ?? null);
-        })
+        .then((list) => setPulls(list))
         .catch((problem: Error) => setError(problem.message)),
     [],
   );
@@ -202,7 +118,39 @@ export default function App() {
     void loadPulls();
   }, [loadPulls]);
 
+  // While an AI check is running, ask again now and then, so the pull request opens up once its results are in.
+  const checking = pulls?.pull_requests.some((item) => pullKind(item) === "checking") ?? false;
+  useEffect(() => {
+    if (!checking) return;
+    const timer = window.setInterval(() => void loadPulls(), POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [checking, loadPulls]);
+
+  /** Opens a pull request, or the list with null. The address follows, so the back button works. */
+  const go = useCallback((number: number | null, replace = false) => {
+    setSelected(number);
+    setSideOpen(false);
+    if (number != null) {
+      setTab("brief");
+      setJustSigned(null);
+    }
+    const address = number == null ? window.location.pathname : `${window.location.pathname}?pr=${number}`;
+    if (replace) window.history.replaceState(null, "", address);
+    else window.history.pushState(null, "", address);
+  }, []);
+
+  useEffect(() => {
+    const onPop = () => setSelected(pullInAddress());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   const pull = pulls?.pull_requests.find((item) => item.number === selected) ?? null;
+
+  // Only a pull request ready to audit opens. A signed one, one still being checked, or an unknown number leads back to the list.
+  useEffect(() => {
+    if (pulls && selected != null && (!pull || pullKind(pull) !== "ready")) go(null, true);
+  }, [pulls, selected, pull, go]);
 
   const loadReview = useCallback((changeId: string, keepView: boolean) => {
     setLoadingExam(true);
@@ -227,24 +175,25 @@ export default function App() {
   const reviewer = exam?.reviewers.find((item) => item.name === reviewerName) ?? exam?.reviewers[0] ?? null;
   // Saved checks belong to the code they were made on. A spot-check copy and the real change differ here.
   const code = useMemo(() => (exam ? codeFingerprint(exam.change.files) : ""), [exam]);
-  const hasBrief = Boolean(pull && pull.status !== "untested" && exam && reviewer);
-
-  const select = (number: number) => {
-    setSelected(number);
-    setTab("brief");
-    setSideOpen(false);
-  };
+  const hasBrief = Boolean(pull && exam && reviewer);
+  const select = (number: number) => go(number);
 
   const sign = async (name: string, decision: string, spots: { plant_id: string; verdict: SpotVerdict }[]) => {
     if (!exam?.session || !reviewer) throw new Error("This review session has ended. Reload the pull request.");
     const result = await postSignOff({ session: exam.session, reviewer: reviewer.name, name, decision, spots });
     if (result.spot_check) {
       setReveal({ result, name: name.trim() });
-    } else {
-      setSignoffs((current) => [...current, result.signoff]);
-      await loadReview(exam.change.id, true);
+      void loadPulls();
+      return;
     }
-    void loadPulls();
+    // Signed is final: the audit's checks are done with, and the pull request closes.
+    exam.reviewers.forEach((item) => clearSaved(storageKey(exam.change.id, item.name)));
+    setSignoffs((current) => [...current, result.signoff]);
+    // Noted before the list reloads: the reload alone already leads back to the list.
+    setJustSigned(pull?.number ?? null);
+    await loadPulls();
+    setExam(null);
+    go(null, true);
   };
 
   const continueAfterReveal = () => {
@@ -288,24 +237,22 @@ export default function App() {
 
   const activeTab = hasBrief ? tab : "pulls";
 
-  const panel = !pull ? (
-    <p className="p-10 text-soft">No pull requests to show.</p>
-  ) : pull.status === "untested" ? (
-    <div className="max-w-xl px-10 py-10">
-      <p className="text-[13.5px] text-soft">Pull request #{pull.number}</p>
-      <h1 className="mt-1 text-[22px] font-semibold leading-snug">{pull.title}</h1>
-      <div className="mt-6 rounded-xl border border-line bg-panel p-5">
-        <p className="text-[15px] font-medium">This pull request has not been tested yet</p>
-        <p className="mt-1 text-soft">Run it from the project folder:</p>
-        <code className="mt-3 block overflow-x-auto rounded-lg bg-canvas p-3 font-mono text-[12px]">
-          .venv/bin/python -m reviewer_controls.pipeline --change {pull.change_id} --kinds bug omission harmless
-        </code>
-        <button type="button" onClick={() => void loadPulls()} className="btn mt-4 h-9 px-3.5 text-[14px]">
-          Check again
-        </button>
+  // Home: the list of pull requests in the middle of the screen.
+  if (!pull) {
+    return (
+      <div className="flex h-full flex-col">
+        <header className="flex h-12 shrink-0 items-center px-3 sm:px-4">
+          <Brand onHome={() => go(null)} />
+        </header>
+        <main className="min-h-0 flex-1">
+          <Landing pulls={pulls} justSigned={justSigned} onOpen={(number) => go(number)} />
+        </main>
+        {reveal && <SpotCheckReveal result={reveal.result} name={reveal.name} onContinue={continueAfterReveal} />}
       </div>
-    </div>
-  ) : !exam || !reviewer ? (
+    );
+  }
+
+  const panel = !exam || !reviewer ? (
     <p className="p-10 text-soft">{loadingExam ? "Loading the review…" : "No review to show."}</p>
   ) : (
     <Workspace
@@ -332,9 +279,9 @@ export default function App() {
           >
             <PanelIcon size={17} />
           </button>
-          <Brand />
+          <Brand onHome={() => go(null)} />
           <span className="mx-1.5 hidden h-5 w-px shrink-0 bg-line sm:block" aria-hidden="true" />
-          {pull && (
+          {(
             <Dropdown
               label="Switch pull request"
               trigger={(open) => (
@@ -348,6 +295,18 @@ export default function App() {
             >
               {(close) => (
                 <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      go(null);
+                      close();
+                    }}
+                    className="mb-1.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[14px] font-medium hover:bg-canvas"
+                  >
+                    <ArrowLeft size={15} className="text-soft" />
+                    All pull requests
+                  </button>
                   <PullGroups
                     pulls={pulls}
                     selected={selected}
@@ -364,7 +323,7 @@ export default function App() {
               )}
             </Dropdown>
           )}
-          {pull?.url && (
+          {pull.url && (
             <a
               href={pull.url}
               target="_blank"
@@ -377,7 +336,7 @@ export default function App() {
             </a>
           )}
         </div>
-        {exam && reviewer && pull?.status !== "untested" && (
+        {exam && reviewer && (
           <Dropdown
             align="right"
             label="AI reviewer under audit"
