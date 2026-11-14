@@ -70,6 +70,10 @@ A working prototype with two parts.
   confirms. Yellow and red points the person decides: met or not met, plus
   a verdict ("looks right" or "looks wrong") on every spot where the
   reviewer missed a planted break.
+- The page shows one task at a time. Finishing a step opens the next one,
+  the question on a point appears once its red spots are judged, and
+  background detail stays folded until asked for. The list of pull requests
+  is a narrow rail that opens on hover.
 - The steps can be taken in any order. The checks are saved in the browser,
   so a review can be paused and continued later. They are thrown away if
   the code shown changes.

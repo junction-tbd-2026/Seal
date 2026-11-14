@@ -3,87 +3,68 @@ import { fetchPulls, fetchReview, postSignOff } from "./lib";
 import { clearSaved, codeFingerprint, readSaved, storageKey } from "./progress";
 import { Prose } from "./Prose";
 import { SpotCheckReveal } from "./SpotCheck";
-import type { Exam, Pull, PullList, PullStatus, Reviewer, SignOff, SignResult, SpotVerdict } from "./types";
+import type { Exam, Pull, PullList, PullStatus, SignOff, SignResult, SpotVerdict } from "./types";
 import { Workspace } from "./Workspace";
 
 const PRODUCT_NAME = "Reviewer Controls";
 
-const STATUS: Record<PullStatus, { label: (pull: Pull) => string; chip: string | ((pull: Pull) => string) }> = {
+/** One short line on where a pull request stands, and the colour of its badge in the rail. */
+const STATUS: Record<PullStatus, { label: (pull: Pull) => string; badge: (pull: Pull) => string }> = {
   needs_you: {
     label: (pull) => `${pull.lines_to_read} ${pull.lines_to_read === 1 ? "spot" : "spots"} to check yourself`,
-    chip: "bg-missed text-white",
+    badge: () => "bg-missed text-white",
   },
-  // "Ready to sign" would be wrong here: the steps come first, whatever the reviewer caught.
+  // Not "ready to sign": the steps come first, whatever the reviewer caught.
   clear: {
     label: (pull) => (pull.planted_defects ? "Reviewer missed nothing we planted" : "Reviewer could not be tested"),
-    chip: (pull) => (pull.planted_defects ? "bg-caught text-white" : "bg-warn text-ink"),
+    badge: (pull) => (pull.planted_defects ? "bg-caught text-white" : "bg-warn text-ink"),
   },
   signed: {
     label: (pull) =>
       `${{ accept: "Accepted", reject: "Rejected", full_read: "Sent for full read" }[pull.signed?.decision ?? ""] ?? "Signed"} by ${pull.signed?.name ?? "someone"}`,
-    chip: "bg-ink text-white",
+    badge: () => "bg-ink text-white",
   },
-  untested: { label: () => "Not tested yet", chip: "bg-panel text-soft" },
+  untested: { label: () => "Not tested yet", badge: () => "border-dashed bg-canvas text-faint" },
 };
 
-/** One plain sentence: what was claimed, how far to believe it, and what to do. */
-function summarise(reviewer: Reviewer): string {
-  const points = reviewer.points;
-  const { defects_caught: caught, defects_total: total } = reviewer.counts;
-  const spots = reviewer.read_yourself.length;
+/** Text in the rail that only shows once the rail is open. */
+const WHEN_OPEN = "opacity-0 transition-opacity duration-150 group-hover/rail:opacity-100 group-has-[:focus-visible]/rail:opacity-100";
 
-  let said: string;
-  if (reviewer.review_failed) {
-    said = "The AI reviewer gave no usable answer on this change.";
-  } else if (points.length > 0) {
-    const met = points.filter((point) => point.status === "met").length;
-    said = `The requirement asks for ${points.length} things. The AI reviewer says ${met} ${met === 1 ? "is" : "are"} met and points to the lines.`;
-  } else {
-    said = reviewer.findings.length > 0 ? `The AI reviewer reported ${reviewer.findings.length} problems.` : "The AI reviewer found no problems.";
-  }
-  const tested =
-    total > 0
-      ? ` We then broke the change ${total} times in copies to see if it would notice: it noticed ${caught}.`
-      : " The reviewer could not be tested on this change.";
-  const todo =
-    spots > 0
-      ? ` The steps take you through every point, and the ${spots} red ${spots === 1 ? "spot" : "spots"} it missed need your own check.`
-      : total > 0
-        ? " It missed nothing we planted. The steps still take you through every point before you sign."
-        : " Treat the change as unreviewed.";
-  return said + tested + todo;
-}
-
+/** One pull request in the rail: a numbered badge that is always visible, and its title and status once the rail opens. */
 function PullItem({ pull, active, onSelect }: { pull: Pull; active: boolean; onSelect: () => void }) {
   const status = STATUS[pull.status];
-  const chip = typeof status.chip === "string" ? status.chip : status.chip(pull);
   // A review this person started here and has not signed yet.
   const saved = pull.status === "needs_you" || pull.status === "clear" ? readSaved(storageKey(pull.change_id, pull.reviewers[0] ?? "")) : null;
+  const started = saved != null && saved.done > 0 && saved.total > 0;
+  const detail = started ? `${saved.done} of ${saved.total} steps done` : status.label(pull);
   return (
     <button
       type="button"
       onClick={onSelect}
       aria-current={active ? "true" : undefined}
-      className={`w-full rounded-lg border-2 border-ink px-3 py-2.5 text-left transition-[transform,box-shadow] ${
-        active ? "-translate-x-0.5 -translate-y-0.5 bg-warn shadow-[var(--shadow-hard)]" : "bg-panel hover:bg-canvas"
+      aria-label={`Pull request ${pull.number}: ${pull.title}. ${detail}`}
+      className={`relative flex w-full items-center gap-3 rounded-lg p-1.5 text-left ${
+        active ? "group-hover/rail:bg-panel group-has-[:focus-visible]/rail:bg-panel" : "hover:bg-panel"
       }`}
     >
-      <span className="flex items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wide text-soft">
-        <span>
-          #{pull.number} · issue {pull.requirement_id}
-        </span>
-        <span>{pull.files} files</span>
-      </span>
-      <span className="mt-1 block text-[14px] font-bold leading-snug">{pull.title}</span>
-      <span className={`mt-2 inline-block rounded border-2 border-ink px-1.5 py-px text-[11px] font-bold ${chip}`}>{status.label(pull)}</span>
-      {saved && saved.done > 0 && saved.total > 0 && (
-        <span className="mt-2 flex items-center gap-2 text-[11.5px] font-bold">
-          <span className="h-2 flex-1 overflow-hidden rounded-sm border-2 border-ink bg-panel" aria-hidden="true">
+      {/* The open pull request: a bar on the rail's edge, so it reads the same closed and open. */}
+      {active && <span className="absolute -left-2.5 top-2.5 h-8 w-1 rounded-r bg-ink" aria-hidden="true" />}
+      <span
+        className={`relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-md border-2 border-ink text-[13px] font-extrabold ${status.badge(pull)} ${
+          active ? "shadow-[var(--shadow-hard-sm)]" : ""
+        }`}
+      >
+        #{pull.number}
+        {started && (
+          <span className="absolute inset-x-0 bottom-0 h-1 bg-panel" aria-hidden="true">
             <span className="block h-full bg-ink" style={{ width: `${Math.round((saved.done / saved.total) * 100)}%` }} />
           </span>
-          Your review: {saved.done} of {saved.total} steps
-        </span>
-      )}
+        )}
+      </span>
+      <span className={`min-w-0 flex-1 ${WHEN_OPEN}`}>
+        <span className="block truncate text-[13.5px] font-bold leading-snug">{pull.title}</span>
+        <span className="block truncate text-[12px] text-soft">{detail}</span>
+      </span>
     </button>
   );
 }
@@ -97,7 +78,6 @@ export default function App() {
   const [reviewerName, setReviewerName] = useState<string | null>(null);
   const [signoffs, setSignoffs] = useState<SignOff[]>([]);
   const [showRequirement, setShowRequirement] = useState(false);
-  const [compare, setCompare] = useState(false);
   // Saved checks live in the browser, not in state: this redraws the list when they change.
   const [, setSavedTick] = useState(0);
   const onSaved = useCallback(() => setSavedTick((tick) => tick + 1), []);
@@ -136,7 +116,6 @@ export default function App() {
     if (!pull) return;
     setExam(null);
     setShowRequirement(false);
-    setCompare(false);
     if (pull.status !== "untested") void loadReview(pull.change_id, false);
     // Reload only when a different pull request is opened.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -192,11 +171,11 @@ export default function App() {
 
   const group = (title: string, items: Pull[]) =>
     items.length > 0 && (
-      <div>
-        <h2 className="mb-2 flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.12em] text-soft">
-          {title} <span className="rounded border-2 border-ink bg-panel px-1.5 text-ink">{items.length}</span>
+      <div className="border-t border-hair pt-2 first:border-t-0 first:pt-0">
+        <h2 className={`whitespace-nowrap px-2 pb-1 text-[11px] font-bold uppercase tracking-[0.1em] text-faint ${WHEN_OPEN}`}>
+          {title} · {items.length}
         </h2>
-        <div className="space-y-2.5">
+        <div className="space-y-1">
           {items.map((item) => (
             <PullItem key={item.number} pull={item} active={item.number === selected} onSelect={() => setSelected(item.number)} />
           ))}
@@ -205,49 +184,44 @@ export default function App() {
     );
 
   return (
-    <div className="grid h-full grid-cols-[19rem_minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)]">
-      <header className="col-span-2 flex items-center justify-between gap-6 border-b-2 border-ink bg-ink px-4 py-2.5 text-white">
-        <div className="flex items-center gap-3">
-          <span className="grid h-7 w-7 place-items-center rounded-md border-2 border-white bg-warn text-[15px] font-extrabold text-ink" aria-hidden="true">
+    <div className="flex h-full flex-col">
+      <header className="flex shrink-0 items-center justify-between gap-6 bg-ink px-4 py-2 text-white">
+        <div className="flex items-center gap-2.5">
+          <span className="grid h-6 w-6 place-items-center rounded bg-warn text-[13px] font-extrabold text-ink" aria-hidden="true">
             ✓
           </span>
-          <span className="text-[17px] font-extrabold tracking-tight">{PRODUCT_NAME}</span>
+          <span className="text-[15px] font-extrabold tracking-tight">{PRODUCT_NAME}</span>
         </div>
-        <div className="flex items-center gap-3 text-[12px]">
+        <div className="flex items-center gap-5 text-[12px] text-white/70">
           {spot.enabled && (
-            <span className="rounded-md border-2 border-white/40 px-2.5 py-1" title="Now and then the code shown for sign-off is a copy with a planted mistake. Accepting it is recorded.">
-              {spot.rate != null && spot.rate < 1
-                ? `About ${Math.round(spot.rate * 100)}% of first sign-offs are spot-checks`
-                : "Sign-offs are spot-checked"}
-              {spot.checked > 0 && (
-                <strong className="ml-1.5 text-warn">
-                  · people caught {spot.caught} of {spot.checked}
-                </strong>
-              )}
+            <span title="Now and then the code shown for sign-off is a copy with a planted mistake. Accepting it is recorded.">
+              {spot.rate != null && spot.rate < 1 ? `About ${Math.round(spot.rate * 100)}% of first sign-offs are spot-checks` : "Sign-offs are spot-checked"}
+              {spot.checked > 0 && ` · people caught ${spot.caught} of ${spot.checked}`}
             </span>
           )}
-          <a
-            href={pulls.repository_url}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-2 rounded-md border-2 border-white/40 px-2.5 py-1 font-mono hover:border-white"
-            title="The repository this tool is watching"
-          >
-            <span className="h-2 w-2 rounded-full bg-caught" /> {pulls.repository}
+          <a href={pulls.repository_url} target="_blank" rel="noreferrer" className="font-mono hover:text-white" title="The repository this tool is watching">
+            {pulls.repository}
           </a>
         </div>
       </header>
 
-      <nav aria-label="Pull requests" className="thin-scroll space-y-6 overflow-y-auto border-r-2 border-ink bg-canvas p-4">
-        <p className="text-[12.5px] leading-snug text-soft">
-          Pull requests opened by an AI agent. An AI reviewer checks each one against its requirement, and we test that reviewer before you sign.
-        </p>
-        {group("Waiting for you", waiting)}
-        {group("Signed", signed)}
-        {group("Not tested yet", untested)}
-      </nav>
+      <div className="relative flex min-h-0 flex-1">
+        {/*
+          The rail keeps its narrow place in the layout; opening it lays it over the page instead of pushing the page aside.
+          It opens on hover and on keyboard focus only, so it closes again after a click. Its box clips rather than hides
+          overflow, because a hidden box can still be scrolled sideways by focus, which would slide the badges out of sight.
+        */}
+        <nav aria-label="Pull requests" className="group/rail relative z-40 w-[4.25rem] shrink-0">
+          <div className="absolute inset-y-0 left-0 w-[4.25rem] overflow-clip border-r-2 border-ink bg-canvas transition-[width,box-shadow] duration-200 ease-out group-hover/rail:w-[20rem] group-hover/rail:shadow-[8px_0_24px_rgb(0_0_0/0.12)] group-hover/rail:delay-100 group-has-[:focus-visible]/rail:w-[20rem] group-has-[:focus-visible]/rail:shadow-[8px_0_24px_rgb(0_0_0/0.12)]">
+            <div className="thin-scroll h-full w-[20rem] space-y-2 overflow-y-auto px-2.5 py-3">
+              {group("Waiting for you", waiting)}
+              {group("Signed", signed)}
+              {group("Not tested yet", untested)}
+            </div>
+          </div>
+        </nav>
 
-      <main className="min-h-0 min-w-0">
+        <main className="min-h-0 min-w-0 flex-1">
         {!pull ? (
           <p className="p-10 text-soft">No pull requests to show.</p>
         ) : pull.status === "untested" ? (
@@ -274,37 +248,37 @@ export default function App() {
             reviewer={reviewer}
             code={code}
             signoffs={signoffs}
-            summary={summarise(reviewer)}
-            compare={compare}
-            onCompare={() => setCompare(true)}
             onReviewer={setReviewerName}
             onSign={sign}
             onSaved={onSaved}
             header={
-              <div className="border-b-2 border-ink bg-canvas px-5 py-2.5">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-bold uppercase tracking-[0.1em] text-soft">
-                  <a href={pull.url} target="_blank" rel="noreferrer" className="underline decoration-2 underline-offset-2 hover:text-ink">
+              // The pull request is context, not the task: one quiet line, with the requirement a click away.
+              <div className="text-[12.5px] text-soft">
+                <div className="flex items-baseline gap-2.5">
+                  <a href={pull.url} target="_blank" rel="noreferrer" className="shrink-0 font-bold text-ink underline underline-offset-2">
                     Pull request #{pull.number}
                   </a>
-                  <span>issue {pull.requirement_id}</span>
-                  <span>written by an AI agent</span>
-                  {totals && (
-                    <span>
-                      {exam.change.files.length} files · <span className="text-caught">+{totals.added}</span> <span className="text-missed">−{totals.removed}</span>
-                    </span>
-                  )}
+                  <span className="min-w-0 truncate">{exam.change.requirement_title}</span>
                   <button
                     type="button"
                     onClick={() => setShowRequirement(!showRequirement)}
                     aria-expanded={showRequirement}
-                    className="text-brand underline decoration-2 underline-offset-2"
+                    className="shrink-0 font-bold text-brand underline underline-offset-2 hover:text-ink"
                   >
-                    {showRequirement ? "Hide the full requirement" : "Read the full requirement"}
+                    {showRequirement ? "Hide the requirement" : "Read the requirement"}
                   </button>
                 </div>
-                <h1 className="mt-1 text-[21px] font-extrabold leading-tight tracking-tight">{exam.change.requirement_title}</h1>
                 {showRequirement && (
-                  <div className="thin-scroll mt-2 max-h-56 overflow-y-auto rounded-md border-2 border-ink bg-panel px-4 py-2">
+                  <div className="thin-scroll mt-3 max-h-64 overflow-y-auto rounded-lg border border-hair bg-canvas px-5 py-3 text-ink">
+                    <p className="text-[12px] text-soft">
+                      Issue {pull.requirement_id} · written by an AI agent
+                      {totals && (
+                        <>
+                          {" "}
+                          · {exam.change.files.length} files, <span className="text-caught">+{totals.added}</span> <span className="text-missed">−{totals.removed}</span>
+                        </>
+                      )}
+                    </p>
                     <Prose text={requirementBody} />
                   </div>
                 )}
@@ -312,7 +286,8 @@ export default function App() {
             }
           />
         )}
-      </main>
+        </main>
+      </div>
 
       {reveal && <SpotCheckReveal result={reveal.result} name={reveal.name} onContinue={continueAfterReveal} />}
     </div>
