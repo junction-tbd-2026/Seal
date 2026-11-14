@@ -88,10 +88,9 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
 - The pipeline, the page and the tests work. The concept card and lessons
   log are up to date.
 - **Results are partial.** The pipeline changed this morning, so all four
-  sample changes are being rerun. In `results/` now: pull request #1 with
-  both reviewers, and pull request #2 with Nemotron. Still to come: pull
-  request #2 with Gemma, and pull requests #3 and #4. On the page those show
-  as "Not tested yet" until their results are committed.
+  sample changes are being rerun. In `results/` now: pull requests #1 and
+  #2 with both reviewers. Still to come: pull requests #3 and #4. On the
+  page those show as "Not tested yet" until their results are committed.
 - The reruns are running on Timo's machine. When they finish, regenerate
   the summary with `scripts/summarise_results.py` and commit `results/` and
   `docs/results.md`. Nobody else needs to start them.

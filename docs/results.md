@@ -22,6 +22,7 @@ read the ranges, not the fractions.
 | Reviewer | Verdict on the real change | Planted defects caught | Supported claim | False alarms | Verdict moved when requirement altered | No answer |
 |---|---|---|---|---|---|---|
 | nemotron-3.5-super-vl | does not meet | 0 of 0 | nothing scored | 0 of 0 | not tested | 1 |
+| gemma-4-31B-it | meets requirement | 1 of 6 | The true catch rate is between 3% and 56% (95% interval). | 0 of 3 | yes | 1 |
 
 ## Pull request #3: Generate a formatter for a type in a referenced assembly
 
@@ -36,4 +37,4 @@ Not tested yet.
 | Reviewer | Planted defects caught | 95% interval | Bugs caught | Omissions caught | False alarms | No answer |
 |---|---|---|---|---|---|---|
 | nemotron-3.5-super-vl | 5 of 7 | 36% to 92% | 3 of 4 | 2 of 3 | 2 of 3 | 1 |
-| gemma-4-31B-it | 0 of 7 | 0% to 35% | 0 of 4 | 0 of 3 | 0 of 3 | 0 |
+| gemma-4-31B-it | 1 of 13 | 1% to 33% | 1 of 8 | 0 of 5 | 0 of 6 | 1 |
