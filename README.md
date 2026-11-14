@@ -80,8 +80,11 @@ A working prototype with two parts.
   listed in the side bar and in a menu at the top.
 - The checks are saved in the browser, so an audit can be paused and
   continued later. They are thrown away if the code shown changes.
-- A sign-off with the person's name. Accept unlocks only when every step is
-  done and nothing is marked wrong. Reject and full read are always open.
+- A sign-off with the person's name. Accept unlocks only when every
+  objective, blind spot and reported problem is judged and nothing is marked
+  wrong. The first step, the test of the AI reviewer, is a briefing, not a
+  check: it counts as seen once the person moves on from it. Reject and full
+  read are always open.
 - A spot-check of the person: for a share of pull requests the code first
   shown is a copy with a planted bug. Accepting it is recorded and nothing
   is approved.

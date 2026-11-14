@@ -4,6 +4,7 @@ import { Avatar } from "./Changes";
 import { ArrowRight, CheckIcon, ChevronDown } from "./icons";
 import { formatWhen, objectiveName } from "./lib";
 import { decisionText, stepLabel, type Step, type StepState } from "./progress";
+import { inline } from "./Prose";
 import type { SignOff } from "./types";
 
 const DECISIONS = [
@@ -19,7 +20,6 @@ function rowsStarted(states: StepState[]): boolean {
 
 function StepRow({ step, state, onGoTo }: { step: Step; state: StepState; onGoTo: (stepId: string) => void }) {
   const title = stepLabel(step).title;
-  const name = step.kind === "point" ? `${objectiveName(step.point.id)} · ${title}` : title;
   return (
     <li>
       <button type="button" onClick={() => onGoTo(step.id)} className="group flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-canvas">
@@ -31,7 +31,10 @@ function StepRow({ step, state, onGoTo }: { step: Step; state: StepState; onGoTo
         >
           {state.flagged ? <span className="text-[11px] font-bold leading-none">!</span> : state.done ? <CheckIcon size={11} strokeWidth={3} /> : null}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[14px]">{name}</span>
+        <span className="min-w-0 flex-1 truncate text-[14px]">
+          {step.kind === "point" && `${objectiveName(step.point.id)} · `}
+          {inline(title)}
+        </span>
         <span className={`shrink-0 text-[13px] ${state.flagged ? "font-medium text-missed" : "text-soft"}`}>
           {state.answer ?? (
             <span className="inline-flex items-center gap-1 text-link group-hover:underline">

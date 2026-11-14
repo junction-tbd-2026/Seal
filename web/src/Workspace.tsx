@@ -220,7 +220,9 @@ export function Workspace({
   const mine = signoffs.filter((entry) => entry.reviewer === reviewer.name);
   const signed = mine[mine.length - 1] ?? null;
   const states: StepState[] = steps.map((item) => stepState(item, progress, signed));
-  const done = states.filter((state) => state.done).length;
+  // Only the steps where the person rules on something count: Test is the briefing, Sign is the decision itself.
+  const judged = steps.flatMap((item, at) => (item.kind === "intro" || item.kind === "sign" ? [] : [{ step: item, state: states[at] }]));
+  const done = judged.filter((row) => row.state.done).length;
   const index = Math.max(0, steps.findIndex((item) => item.id === progress.step));
   const step = steps[index];
   const state = states[index];
@@ -240,9 +242,14 @@ export function Workspace({
   useEffect(() => {
     if (progress === opened.progress) return;
     if (isBlank(progress)) clearSaved(key);
-    else writeSaved(key, { ...progress, done, total: steps.length, savedAt: new Date().toISOString() });
+    else writeSaved(key, { ...progress, done, total: judged.length, savedAt: new Date().toISOString() });
     onSaved();
-  }, [progress, opened, key, done, steps.length, onSaved]);
+  }, [progress, opened, key, done, judged.length, onSaved]);
+
+  // Test is the briefing, not a check: being on any other step means the person has seen it.
+  useEffect(() => {
+    if (step.kind !== "intro" && !progress.intro) setProgress((current) => ({ ...current, intro: true }));
+  }, [step.kind, progress.intro]);
 
   // A new step starts at its top.
   useEffect(() => {
@@ -484,7 +491,7 @@ export function Workspace({
         meta: "You · auditor",
         title: "Sign the audit",
         tasks: [
-          { text: `${done - (signed ? 1 : 0)} of ${steps.length - 1} steps done`, done: done - (signed ? 1 : 0) === steps.length - 1 },
+          { text: `${done} of ${plural(judged.length, "step")} done`, done: done === judged.length },
           ...(flagged > 0 ? [{ text: `${plural(flagged, "step")} marked wrong`, flagged: true }] : []),
           { text: "Accept, ask for a full read, or reject", done: signed != null },
         ],
@@ -644,8 +651,8 @@ export function Workspace({
                 <ReviewerTest exam={exam} reviewer={reviewer} />
               ) : step.kind === "sign" ? (
                 <SignOffStep
-                  steps={steps.slice(0, -1)}
-                  states={states.slice(0, -1)}
+                  steps={judged.map((row) => row.step)}
+                  states={judged.map((row) => row.state)}
                   mine={mine}
                   onGoTo={goTo}
                   onClear={clear}

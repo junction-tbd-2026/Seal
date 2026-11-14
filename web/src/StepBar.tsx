@@ -8,7 +8,9 @@ import { stepLabel, type Step, type StepState } from "./progress";
  */
 export function StepBar({ steps, states, current, onGoTo }: { steps: Step[]; states: StepState[]; current: string; onGoTo: (stepId: string) => void }) {
   const reduced = useReducedMotion() ?? false;
-  const done = states.filter((state) => state.done).length;
+  // The count covers the steps the person rules on, not the Test briefing or the sign-off itself.
+  const judged = states.filter((_, index) => steps[index].kind !== "intro" && steps[index].kind !== "sign");
+  const done = judged.filter((state) => state.done).length;
   return (
     <div className="flex items-end gap-6">
       <nav aria-label="Audit steps" className="min-w-0 flex-1">
@@ -59,7 +61,7 @@ export function StepBar({ steps, states, current, onGoTo }: { steps: Step[]; sta
         </ol>
       </nav>
       <p className="hidden shrink-0 pb-px text-[12.5px] text-faint md:block" title="The audit is saved in this browser. You can stop and continue later.">
-        {done} of {steps.length} steps done · saved in this browser
+        {done} of {judged.length} steps done · saved in this browser
       </p>
     </div>
   );
