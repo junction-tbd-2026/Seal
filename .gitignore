@@ -1,0 +1,23 @@
+# Secrets: never commit keys. This repository is public.
+.env
+.env.*
+*keys*.env
+*.pem
+*.key
+!keys.example.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Local clones of the sample repository under review
+work/
+
+# Hackathon research notes (collected challenge briefs), not part of the product
+junction2026/
+
+# OS
+.DS_Store

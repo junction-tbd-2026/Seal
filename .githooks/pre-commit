@@ -1,0 +1,59 @@
+#!/bin/bash
+# Blocks a commit that contains a key. Three checks, in order of strength:
+#   1. a file that looks like a keys file is staged
+#   2. a real value from your keys file appears in the staged changes
+#   3. a string shaped like a known provider key appears in the staged changes
+# It never prints the key itself.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+
+keys_file="${JUNCTION_KEYS_FILE:-$HOME/.junction-keys.env}"
+blocked=0
+
+staged_names=$(git diff --cached --name-only --diff-filter=ACMR)
+added_lines=$(git diff --cached --no-color -U0 --diff-filter=ACMR | grep '^+' | grep -v '^+++ ')
+
+# 1. Keys files by name. Templates named *.example.env are allowed.
+while IFS= read -r name; do
+  [ -z "$name" ] && continue
+  base=$(basename "$name")
+  case "$base" in
+    *.example.env|.env.example) ;;
+    .env|.env.*|*keys*.env|*.pem|*.key)
+      echo "BLOCKED: '$name' looks like a keys file. Keys stay outside the project."
+      blocked=1 ;;
+  esac
+done <<< "$staged_names"
+
+# 2. Real values from the keys file.
+if [ -f "$keys_file" ]; then
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    name="${line%%=*}"
+    value="${line#*=}"
+    value="${value%\"}"; value="${value#\"}"
+    value="${value%\'}"; value="${value#\'}"
+    case "$name" in *KEY*|*TOKEN*|*SECRET*) ;; *) continue ;; esac
+    [ "${#value}" -lt 12 ] && continue
+    if printf '%s\n' "$added_lines" | grep -F -q -- "$value"; then
+      echo "BLOCKED: the value of $name from your keys file is in the staged changes."
+      blocked=1
+    fi
+  done < "$keys_file"
+fi
+
+# 3. Strings shaped like provider keys.
+pattern='nvapi-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,}|hf_[A-Za-z0-9]{30,}|gh[pousr]_[A-Za-z0-9]{30,}|(^|[^A-Za-z0-9])a[ks]-[A-Za-z0-9]{20,}'
+hits=$(printf '%s\n' "$added_lines" | grep -E -c -- "$pattern")
+if [ "$hits" -gt 0 ]; then
+  echo "BLOCKED: $hits staged line(s) contain a string shaped like an API key."
+  blocked=1
+fi
+
+if [ "$blocked" -ne 0 ]; then
+  echo
+  echo "Nothing was committed. Remove the key from the file, then stage and commit again."
+  echo "If a real key was ever staged or saved in this folder, revoke it and create a new one."
+  exit 1
+fi
+exit 0
