@@ -150,8 +150,57 @@ def run_controls(
             report.notes.append("The requirement could not be split into points: {}".format(error))
     report.requirement_points = points or []
 
-    if original_review is None:
+    # When the planted variants are already known, nothing below depends on anything else:
+    # the two reviews of the real change, every variant and the altered-requirement review all
+    # go out in one round. Planting fresh needs the real change reviewed first, for its citations.
+    in_one_round = original_review is None and plants is not None
+    if original_review is None and not in_one_round:
         original_review, repeat_review = first_reviews(change, reviewer, report.requirement_points, progress)
+
+    if plants is not None:
+        _say(progress, "Reusing {} planted variants".format(len(plants)))
+        report.plants = plants
+    else:
+        _say(progress, "Planting {} variants ({}) inside the lines the reviewer cited".format(count, ", ".join(kinds)))
+        report.plants = planter.plant(change, count, kinds, report.requirement_points, cited_targets([original_review]))
+        report.notes.extend(getattr(planter, "problems", []))
+    if len(report.plants) < count:
+        report.notes.append("Asked for {} planted variants; {} were usable.".format(count, len(report.plants)))
+
+    # The altered requirement is only used when the reviewer says the real change meets the
+    # requirement. In one round that is not known yet, so it is reviewed anyway and kept only if so.
+    may_alter = in_one_round or (original_review is not None and original_review.meets_requirement is True)
+    if may_alter and not altered_requirement and not in_one_round:
+        try:
+            altered_requirement = planter.alter_requirement(change)
+        except ModelError as error:
+            report.notes.append("Could not write an altered requirement: {}".format(error))
+
+    def review_variant(plant: Plant) -> ReviewResult:
+        result = reviewer.review(
+            change, variant_id=plant.id, variant_diff=plant.variant_diff, points=report.requirement_points
+        )
+        _say(progress, "  {} reviewed".format(plant.id))
+        return result
+
+    _say(progress, "Reviewing {} variants blind{}".format(
+        len(report.plants), ", with the real change and the altered requirement in the same round" if in_one_round else ""))
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        if in_one_round:
+            first = pool.submit(reviewer.review, change, points=list(report.requirement_points))
+            second = pool.submit(reviewer.review, change, variant_id="repeat", points=list(report.requirement_points)) \
+                if report.requirement_points else None
+        variants = [pool.submit(review_variant, plant) for plant in report.plants]
+        flipped_future = (
+            pool.submit(reviewer.review, change, variant_id="altered-requirement", requirement_override=altered_requirement)
+            if may_alter and altered_requirement else None
+        )
+        if in_one_round:
+            original_review = first.result()
+            repeat_review = second.result() if second is not None and not original_review.error else None
+        report.variant_reviews = [future.result() for future in variants]
+        flipped = flipped_future.result() if flipped_future is not None else None
+
     report.original_review = original_review
     report.repeat_review = repeat_review
     if original_review.error:
@@ -175,56 +224,23 @@ def run_controls(
                     )
                 )
 
-    if plants is not None:
-        _say(progress, "Reusing {} planted variants".format(len(plants)))
-        report.plants = plants
-    else:
-        _say(progress, "Planting {} variants ({}) inside the lines the reviewer cited".format(count, ", ".join(kinds)))
-        report.plants = planter.plant(change, count, kinds, report.requirement_points, cited_targets([original_review]))
-        report.notes.extend(getattr(planter, "problems", []))
-    if len(report.plants) < count:
-        report.notes.append("Asked for {} planted variants; {} were usable.".format(count, len(report.plants)))
-
-    _say(progress, "Reviewing {} variants blind".format(len(report.plants)))
-
-    def review_variant(plant: Plant) -> ReviewResult:
-        result = reviewer.review(
-            change, variant_id=plant.id, variant_diff=plant.variant_diff, points=report.requirement_points
-        )
-        _say(progress, "  {} reviewed".format(plant.id))
-        return result
-
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        report.variant_reviews = list(pool.map(review_variant, report.plants))
-
     for plant, variant in zip(report.plants, report.variant_reviews):
         if variant.error:
             report.notes.append("Review of {} failed and is left out of the score: {}".format(plant.id, variant.error))
             continue
         report.outcomes.append(score(plant, variant, original_review, report.unstable_points))
 
-    _say(progress, "Rerunning the review with the requirement altered")
     if original_review.meets_requirement is not True:
         report.notes.append(
             "Altered-requirement check skipped: the reviewer did not say the real change meets the requirement."
         )
-    else:
-        if altered_requirement:
-            report.altered_requirement = altered_requirement
+    elif flipped is not None:
+        report.altered_requirement = altered_requirement
+        report.altered_requirement_review = flipped
+        if flipped.error:
+            report.notes.append("Altered-requirement review failed: {}".format(flipped.error))
         else:
-            try:
-                report.altered_requirement = planter.alter_requirement(change)
-            except ModelError as error:
-                report.notes.append("Could not write an altered requirement: {}".format(error))
-        if report.altered_requirement:
-            flipped = reviewer.review(
-                change, variant_id="altered-requirement", requirement_override=report.altered_requirement
-            )
-            report.altered_requirement_review = flipped
-            if flipped.error:
-                report.notes.append("Altered-requirement review failed: {}".format(flipped.error))
-            else:
-                report.requirement_flip_changed_verdict = flipped.meets_requirement is not True
+            report.requirement_flip_changed_verdict = flipped.meets_requirement is not True
 
     reviews = [original_review] + report.variant_reviews
     if repeat_review:
