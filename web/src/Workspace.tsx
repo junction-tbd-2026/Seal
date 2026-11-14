@@ -2,9 +2,9 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Brief, Dots, type BriefNode, type BriefTask } from "./Brief";
-import { ChangeDrawer, Changes, blockMarks, layoutChanges, type Cite, type Lens } from "./Changes";
+import { ChangeDrawer, Changes, layoutChanges, type Cite, type Lens } from "./Changes";
 import type { Mark } from "./DiffView";
-import { ArrowLeft, ArrowRight, ArrowUpRight, CheckIcon, PanelIcon, SkipIcon, XIcon } from "./icons";
+import { ArrowLeft, ArrowRight, ArrowUpRight, CheckIcon, SkipIcon, XIcon } from "./icons";
 import { fileName, lineRange, objectiveName, plural, prettyModel, sameFile, shortModel } from "./lib";
 import { Prose, inline } from "./Prose";
 import {
@@ -363,15 +363,6 @@ export function Workspace({
     [exam, reviewer, lens],
   );
   const fullFiles = layout ? layout.files.map((item) => item.file) : exam.change.files;
-  // Open the full change where the review needs a reader most: the first blind spot, else the first file.
-  const firstBlind = exam.plants.find((plant) => reviewer.read_yourself.includes(plant.id));
-  const fullStart = (): { path: string; line: number | null } => {
-    const first = layout?.marked ? layout.files[0] : undefined;
-    const starts = first ? first.blocks.flatMap(blockMarks).map((mark) => mark.start) : [];
-    if (first && starts.length > 0) return { path: first.file.path, line: Math.min(...starts) };
-    if (firstBlind) return { path: firstBlind.file, line: firstBlind.line_start };
-    return { path: fullFiles[0]?.path ?? "", line: null };
-  };
 
   // ---- The audit brief in the side bar ----
   const counts = reviewer.counts;
@@ -632,15 +623,7 @@ export function Workspace({
                   Read the requirement (issue {exam.change.requirement_id})
                   <ArrowUpRight size={14} />
                 </button>
-                <span aria-hidden="true">·</span>
-                <button
-                  type="button"
-                  onClick={() => setFull(fullStart())}
-                  className="inline-flex items-center gap-1 text-link hover:underline"
-                >
-                  See the full change
-                  <PanelIcon size={14} />
-                </button>
+
               </p>
               <h1 className="mt-2 max-w-[60rem] text-[18px] font-semibold leading-[1.3] tracking-[-0.01em] sm:text-[22px]">{title}</h1>
               {step.kind !== "point" && <p className="mt-2 max-w-[46rem] text-[14px] leading-relaxed text-soft">{stepTask(step, exam, reviewer)}</p>}
