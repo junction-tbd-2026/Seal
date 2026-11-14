@@ -1,0 +1,65 @@
+name: CI
+
+# Every job runs on CRACI runners. None of them needs a key: the tests run
+# without keys, and the image serves saved result files only.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: craci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: PYTHONPATH=src python -m unittest discover -s tests
+
+  web:
+    name: Page build
+    runs-on: craci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm --prefix web ci --no-fund --no-audit
+      - run: npm --prefix web run build
+
+  image:
+    name: Container image
+    runs-on: craci
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the image Aiven deploys
+        run: docker build --tag seal:ci .
+      - name: Start it with no keys and no settings, then check the page and the API
+        run: |
+          docker run --detach --name seal --publish 8080:8080 seal:ci
+          for attempt in $(seq 1 30); do
+            curl --silent --fail --output /dev/null http://127.0.0.1:8080/api/health && break
+            sleep 1
+          done
+          curl --silent --fail http://127.0.0.1:8080/api/health
+          curl --silent --fail http://127.0.0.1:8080/api/pulls | grep --quiet '"change_id"'
+          curl --silent --fail http://127.0.0.1:8080/ | grep --quiet 'id="root"'
+          # The server appends sign-offs to results/, so its user must be able to write there.
+          docker exec seal test -w results
+      - name: Show the server log
+        if: failure()
+        run: docker logs seal || true
