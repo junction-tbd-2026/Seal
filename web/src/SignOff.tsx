@@ -1,16 +1,22 @@
 import { useState } from "react";
-import { formatWhen } from "./lib";
+import { COLUMN, formatWhen, objectiveName } from "./lib";
 import { decisionText, stepLabel, type Step, type StepState } from "./progress";
 import type { SignOff } from "./types";
 
 const DECISIONS = [
-  { value: "accept", label: "Accept", style: "bg-caught text-white" },
-  { value: "full_read", label: "Ask for a full read", style: "bg-warn" },
-  { value: "reject", label: "Reject", style: "bg-missed text-white" },
+  { value: "accept", label: "Accept the pull request", style: "bg-caught text-white" },
+  { value: "full_read", label: "Ask for a full human read", style: "bg-warn" },
+  { value: "reject", label: "Reject the pull request", style: "bg-missed text-white" },
 ];
+
+/** True once the person has checked anything, so there is something to clear. */
+function rowsStarted(states: StepState[]): boolean {
+  return states.some((state) => state.done || state.answer != null);
+}
 
 function StepRow({ step, state, onGoTo }: { step: Step; state: StepState; onGoTo: (stepId: string) => void }) {
   const title = stepLabel(step).title;
+  const name = step.kind === "point" ? `${objectiveName(step.point.id)} · ${title}` : title;
   return (
     <li>
       <button type="button" onClick={() => onGoTo(step.id)} className="group flex w-full items-baseline gap-3 rounded-md px-2 py-1.5 text-left hover:bg-canvas">
@@ -22,9 +28,9 @@ function StepRow({ step, state, onGoTo }: { step: Step; state: StepState; onGoTo
         >
           {state.flagged ? "!" : state.done ? "✓" : ""}
         </span>
-        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{step.kind === "point" ? `${step.point.id} · ${title}` : title}</span>
+        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{name}</span>
         <span className={`shrink-0 text-[12.5px] ${state.flagged ? "font-bold text-missed" : "text-soft"}`}>
-          {state.answer ?? <span className="font-bold text-brand group-hover:underline">Open →</span>}
+          {state.answer ?? <span className="font-bold text-brand group-hover:underline">Open the step →</span>}
         </span>
       </button>
     </li>
@@ -41,6 +47,7 @@ export function SignOffStep({
   states,
   mine,
   onGoTo,
+  onClear,
   onSign,
 }: {
   /** Every step before this one, with its state at the same index. */
@@ -49,9 +56,13 @@ export function SignOffStep({
   /** Earlier sign-offs on this reviewer's results. */
   mine: SignOff[];
   onGoTo: (stepId: string) => void;
+  /** Throws away every check of the audit, to start again. */
+  onClear: () => void;
   onSign: (name: string, decision: string) => Promise<void>;
 }) {
   const [name, setName] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
+  const started = rowsStarted(states);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,7 +87,8 @@ export function SignOffStep({
 
   return (
     <div className="thin-scroll min-h-0 flex-1 overflow-y-auto bg-canvas">
-      <div className="max-w-2xl space-y-4 px-8 py-6">
+      <div className={`${COLUMN} py-6`}>
+        <div className="max-w-2xl space-y-4">
         {mine.length > 0 && (
           <ul className="rounded-lg border-2 border-ink bg-caught-wash px-5 py-3 text-[13.5px]">
             {mine.slice(-3).map((entry, index) => (
@@ -91,8 +103,8 @@ export function SignOffStep({
           <section className="rounded-lg border-2 border-ink bg-panel px-5 py-4">
             <h3 className="text-[15px] font-bold">
               {flagged.length > 0
-                ? "You marked something as wrong, so this cannot be accepted"
-                : `${open.length === 1 ? "One step is" : `${open.length} steps are`} left before you can accept`}
+                ? `You marked ${flagged.length === 1 ? "1 step" : `${flagged.length} steps`} as wrong. The pull request cannot be accepted.`
+                : `${open.length === 1 ? "1 step is" : `${open.length} steps are`} open. Finish every step to unlock “Accept the pull request”.`}
             </h3>
             <ul className="-mx-2 mt-2">
               {(flagged.length > 0 ? flagged : open).map((row) => (
@@ -104,7 +116,7 @@ export function SignOffStep({
 
         <section className="rounded-lg border-2 border-ink bg-panel px-5 py-5 shadow-[var(--shadow-hard)]">
           <label htmlFor="signer" className="text-[15px] font-bold">
-            {blocked ? "Or decide now" : "Everything is checked. Your decision?"}
+            {blocked ? "Decide without accepting" : "Every step is done. Your decision on the pull request:"}
           </label>
           <input
             id="signer"
@@ -137,7 +149,7 @@ export function SignOffStep({
         {finished.length > 0 && (
           <details className="group text-[13px]" open={!blocked}>
             <summary className="cursor-pointer list-none px-1 font-bold text-soft hover:text-ink">
-              What you checked ({finished.length}) <span className="group-open:hidden">+</span>
+              Steps you finished ({finished.length}) <span className="group-open:hidden">+</span>
               <span className="hidden group-open:inline">−</span>
             </summary>
             <ul className="mt-1">
@@ -147,6 +159,31 @@ export function SignOffStep({
             </ul>
           </details>
         )}
+
+        {started &&
+          (confirmClear ? (
+            <p className="flex flex-wrap items-center gap-2 px-1 text-[12.5px]">
+              <span className="font-bold">Clear every check of the audit?</span>
+              <button
+                type="button"
+                onClick={() => {
+                  onClear();
+                  setConfirmClear(false);
+                }}
+                className="rounded bg-missed px-2 py-px font-bold text-white"
+              >
+                Clear the audit
+              </button>
+              <button type="button" onClick={() => setConfirmClear(false)} className="rounded border border-hair bg-panel px-2 py-px font-bold">
+                Keep the audit
+              </button>
+            </p>
+          ) : (
+            <button type="button" onClick={() => setConfirmClear(true)} className="px-1 text-[12.5px] font-medium text-soft underline underline-offset-2 hover:text-ink">
+              Clear the audit and start over
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

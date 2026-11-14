@@ -1,7 +1,8 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useState } from "react";
 import { DiffView } from "./DiffView";
-import { KIND_LABEL, KIND_MEANING, RESULT_LABEL, RESULT_MEANING, prettyModel } from "./lib";
+import { COLUMN, KIND_LABEL, KIND_MEANING, RESULT_LABEL, RESULT_MEANING, prettyModel } from "./lib";
+import type { Step } from "./progress";
 import type { Exam, Reviewer, Result } from "./types";
 
 const SQUARE: Record<Result, string> = {
@@ -47,10 +48,10 @@ function Fold({ title, children }: { title: string; children: React.ReactNode })
 }
 
 /**
- * The first step: what the AI reviewer said about the real code, and how it did when we
- * tested it on copies with planted mistakes. Two facts up front; the rest is folded away.
+ * The first step: the verdict of the AI reviewer, how the AI reviewer did on our test, and
+ * what the audit asks of the person. Three facts up front; the rest is folded away.
  */
-export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewer }) {
+export function ReviewerTest({ exam, reviewer, steps }: { exam: Exam; reviewer: Reviewer; steps: Step[] }) {
   const reduced = useReducedMotion() ?? false;
   const [revealed, setRevealed] = useState(exam.plants.length);
   const [picked, setPicked] = useState<string | null>(null);
@@ -66,6 +67,15 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
   const done = revealed >= exam.plants.length;
   const { counts } = reviewer;
   const problems = reviewer.findings.length;
+  const objectives = steps.filter((step) => step.kind === "point").length;
+  const redLines = reviewer.read_yourself.length;
+  const tasks = [
+    objectives > 0 &&
+      `Audit ${objectives === 1 ? "the review objective" : `each of the ${objectives} review objectives`}: the claim of the AI reviewer, and the code the AI reviewer cites as evidence.`,
+    redLines > 0 && `Judge the real code at ${redLines === 1 ? "the 1 line" : `the ${redLines} lines`} where the AI reviewer missed a planted mistake.`,
+    problems > 0 && `Judge ${problems === 1 ? "the 1 problem" : `the ${problems} problems`} the AI reviewer reported.`,
+    "Sign: accept the pull request, ask for a full human read, or reject the pull request.",
+  ].filter((task): task is string => Boolean(task));
 
   const verdict = reviewer.review_failed
     ? { text: "No usable answer", tone: "bg-warn-wash" }
@@ -77,23 +87,23 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
 
   return (
     <div className="thin-scroll min-h-0 flex-1 overflow-y-auto bg-canvas">
-      <div className="max-w-3xl space-y-4 px-8 py-6">
-        <div className="grid items-stretch gap-4 sm:grid-cols-2">
+      <div className={`${COLUMN} space-y-4 py-6`}>
+        <div className="grid items-stretch gap-4 lg:grid-cols-3">
           <section className={`rounded-lg border-2 border-ink px-5 py-5 ${verdict.tone}`}>
-            <h3 className="text-[12px] font-bold text-soft">{prettyModel(reviewer.name)} says</h3>
+            <h3 className="text-[12px] font-bold text-soft">1 · Verdict of {prettyModel(reviewer.name)}</h3>
             <p className="mt-2 text-[24px] font-extrabold leading-tight tracking-tight">{verdict.text}</p>
             <p className="mt-3 text-[13px] leading-snug text-soft">
               {reviewer.review_failed
-                ? "Treat the change as unreviewed."
+                ? "Treat the pull request as unreviewed."
                 : problems > 0
-                  ? `It reported ${problems === 1 ? "a problem" : `${problems} problems`} in the real code. You judge ${problems === 1 ? "it" : "them"} in a later step.`
-                  : "It reported no problems. That is an opinion, not proof."}
+                  ? `The AI reviewer reported ${problems === 1 ? "1 problem" : `${problems} problems`} in the real code.`
+                  : "The AI reviewer reported no problems. The verdict is an opinion, not proof."}
             </p>
           </section>
 
           <section className="rounded-lg border-2 border-ink bg-panel px-5 py-5">
             <div className="flex items-baseline justify-between gap-3">
-              <h3 className="text-[12px] font-bold text-soft">We tested that opinion</h3>
+              <h3 className="text-[12px] font-bold text-soft">2 · Our test of the AI reviewer</h3>
               <button
                 type="button"
                 onClick={() => {
@@ -146,6 +156,16 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
               ))}
             </p>
           </section>
+
+          <section className="rounded-lg border-2 border-ink bg-warn-wash px-5 py-5">
+            <h3 className="text-[12px] font-bold text-soft">3 · Your audit</h3>
+            <ol className="mt-2 list-decimal space-y-2 pl-4 text-[13.5px] font-medium leading-snug">
+              {tasks.map((task) => (
+                <li key={task}>{task}</li>
+              ))}
+            </ol>
+            <p className="mt-3 text-[12px] text-soft">The audit is saved in this browser. You can stop and continue later.</p>
+          </section>
         </div>
 
         <AnimatePresence initial={false}>
@@ -173,7 +193,7 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
                 <p className="mt-3 text-[13px]">
                   {reviewer.said[pickedPlant.id] ? (
                     <>
-                      <span className="font-bold">Reviewer:</span> “{reviewer.said[pickedPlant.id]}”
+                      <span className="font-bold">AI reviewer:</span> “{reviewer.said[pickedPlant.id]}”
                     </>
                   ) : (
                     <span className="text-soft">{RESULT_MEANING[reviewer.results[pickedPlant.id]]}</span>
@@ -184,11 +204,12 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
           )}
         </AnimatePresence>
 
-        <div className="border-b border-hair">
-          <Fold title="How the test works">
+        <div className="max-w-3xl border-b border-hair">
+          <Fold title="How the test of the AI reviewer works">
             <p>
-              We hid mistakes of our own in copies of this change and asked the same reviewer to review each copy. None of these mistakes are in the real code.
-              Where it missed one, a real mistake in the same place would have slipped past it too, so you check those places yourself.
+              We planted one mistake in each of several copies of the pull request, and the AI reviewer reviewed every copy without knowing about the test.
+              No planted mistake is in the real code. Where the AI reviewer missed a planted mistake, the AI reviewer would also miss a real mistake at the
+              same line, so you judge the real code at each of those lines.
             </p>
             <ul className="mt-2 list-disc space-y-1 pl-4">
               <li>{reviewer.claim}</li>
@@ -199,10 +220,10 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
               </li>
               <li>
                 {reviewer.requirement_flip_changed_verdict === true
-                  ? "Its verdict changed when we altered the requirement, so it did check against the requirement."
+                  ? "The verdict of the AI reviewer changed when we altered the requirement, so the AI reviewer did check against the requirement."
                   : reviewer.requirement_flip_changed_verdict === false
-                    ? "Its verdict did NOT change when we altered the requirement."
-                    : "Whether it reads the requirement was not tested."}
+                    ? "The verdict of the AI reviewer did NOT change when we altered the requirement."
+                    : "Whether the AI reviewer reads the requirement was not tested."}
               </li>
               {counts.failed > 0 && (
                 <li>
@@ -214,10 +235,10 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
           <Fold title="What was not checked">
             <ul className="list-disc space-y-1 pl-4">
               {reviewer.refused_to_decide.map((item, index) => (
-                <li key={index}>The reviewer refused to decide: {item}</li>
+                <li key={index}>The AI reviewer refused to decide: {item}</li>
               ))}
               {!exam.build_checked && <li>Planted copies were not compiled or run, so some may not be real defects.</li>}
-              <li>Design-level mistakes, and anything outside this change.</li>
+              <li>Design-level mistakes, and anything outside the pull request.</li>
               <li>Planted defects are usually easier to catch than real ones, so the figures lean optimistic.</li>
             </ul>
             <p className="mt-2 text-faint">

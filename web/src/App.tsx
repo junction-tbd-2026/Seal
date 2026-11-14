@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchPulls, fetchReview, postSignOff } from "./lib";
+import { fetchPulls, fetchReview, postSignOff, prettyModel } from "./lib";
 import { clearSaved, codeFingerprint, readSaved, storageKey } from "./progress";
 import { Prose } from "./Prose";
 import { SpotCheckReveal } from "./SpotCheck";
@@ -11,12 +11,12 @@ const PRODUCT_NAME = "Reviewer Controls";
 /** One short line on where a pull request stands, and the colour of its badge in the rail. */
 const STATUS: Record<PullStatus, { label: (pull: Pull) => string; badge: (pull: Pull) => string }> = {
   needs_you: {
-    label: (pull) => `${pull.lines_to_read} ${pull.lines_to_read === 1 ? "spot" : "spots"} to check yourself`,
+    label: (pull) => `AI reviewer missed planted mistakes at ${pull.lines_to_read} ${pull.lines_to_read === 1 ? "line" : "lines"}`,
     badge: () => "bg-missed text-white",
   },
   // Not "ready to sign": the steps come first, whatever the reviewer caught.
   clear: {
-    label: (pull) => (pull.planted_defects ? "Reviewer missed nothing we planted" : "Reviewer could not be tested"),
+    label: (pull) => (pull.planted_defects ? "AI reviewer noticed every planted mistake" : "AI reviewer could not be tested"),
     badge: (pull) => (pull.planted_defects ? "bg-caught text-white" : "bg-warn text-ink"),
   },
   signed: {
@@ -36,7 +36,7 @@ function PullItem({ pull, active, onSelect }: { pull: Pull; active: boolean; onS
   // A review this person started here and has not signed yet.
   const saved = pull.status === "needs_you" || pull.status === "clear" ? readSaved(storageKey(pull.change_id, pull.reviewers[0] ?? "")) : null;
   const started = saved != null && saved.done > 0 && saved.total > 0;
-  const detail = started ? `${saved.done} of ${saved.total} steps done` : status.label(pull);
+  const detail = started ? `Your audit: ${saved.done} of ${saved.total} steps done` : status.label(pull);
   return (
     <button
       type="button"
@@ -214,7 +214,7 @@ export default function App() {
         <nav aria-label="Pull requests" className="group/rail relative z-40 w-[4.25rem] shrink-0">
           <div className="absolute inset-y-0 left-0 w-[4.25rem] overflow-clip border-r-2 border-ink bg-canvas transition-[width,box-shadow] duration-200 ease-out group-hover/rail:w-[20rem] group-hover/rail:shadow-[8px_0_24px_rgb(0_0_0/0.12)] group-hover/rail:delay-100 group-has-[:focus-visible]/rail:w-[20rem] group-has-[:focus-visible]/rail:shadow-[8px_0_24px_rgb(0_0_0/0.12)]">
             <div className="thin-scroll h-full w-[20rem] space-y-2 overflow-y-auto px-2.5 py-3">
-              {group("Waiting for you", waiting)}
+              {group("Waiting for your audit", waiting)}
               {group("Signed", signed)}
               {group("Not tested yet", untested)}
             </div>
@@ -248,13 +248,13 @@ export default function App() {
             reviewer={reviewer}
             code={code}
             signoffs={signoffs}
-            onReviewer={setReviewerName}
             onSign={sign}
             onSaved={onSaved}
             header={
-              // The pull request is context, not the task: one quiet line, with the requirement a click away.
+              // Says on every screen what the person is doing: auditing the review one AI model made of one pull request.
               <div className="text-[12.5px] text-soft">
-                <div className="flex items-baseline gap-2.5">
+                <div className="flex items-baseline gap-x-2.5">
+                  <span className="shrink-0 rounded-sm bg-ink px-1.5 py-px text-[11px] font-bold uppercase tracking-wide text-white">Audit of an AI review</span>
                   <a href={pull.url} target="_blank" rel="noreferrer" className="shrink-0 font-bold text-ink underline underline-offset-2">
                     Pull request #{pull.number}
                   </a>
@@ -265,19 +265,39 @@ export default function App() {
                     aria-expanded={showRequirement}
                     className="shrink-0 font-bold text-brand underline underline-offset-2 hover:text-ink"
                   >
-                    {showRequirement ? "Hide the requirement" : "Read the requirement"}
+                    {showRequirement ? "Hide" : "Read"} the requirement (issue {pull.requirement_id})
                   </button>
+                  <span className="ml-auto flex shrink-0 items-baseline gap-1.5 pl-4">
+                    AI reviewer:
+                    {exam.reviewers.length > 1 ? (
+                      <select
+                        aria-label="AI reviewer under audit"
+                        value={reviewer.name}
+                        onChange={(event) => setReviewerName(event.target.value)}
+                        className="rounded border border-hair bg-panel px-1.5 py-0.5 text-[12.5px] font-bold text-ink"
+                      >
+                        {exam.reviewers.map((item) => (
+                          <option key={item.name} value={item.name}>
+                            {prettyModel(item.name)}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="font-bold text-ink">{prettyModel(reviewer.name)}</span>
+                    )}
+                  </span>
                 </div>
                 {showRequirement && (
                   <div className="thin-scroll mt-3 max-h-64 overflow-y-auto rounded-lg border border-hair bg-canvas px-5 py-3 text-ink">
-                    <p className="text-[12px] text-soft">
-                      Issue {pull.requirement_id} · written by an AI agent
+                    <p className="text-[15px] font-bold">{exam.change.requirement_title}</p>
+                    <p className="mt-0.5 text-[12px] text-soft">
+                      Issue {pull.requirement_id}. The pull request was written by an AI agent to resolve the issue
                       {totals && (
                         <>
-                          {" "}
-                          · {exam.change.files.length} files, <span className="text-caught">+{totals.added}</span> <span className="text-missed">−{totals.removed}</span>
+                          : {exam.change.files.length} files, <span className="text-caught">+{totals.added}</span> <span className="text-missed">−{totals.removed}</span>
                         </>
                       )}
+                      . The review objectives were derived from the issue text.
                     </p>
                     <Prose text={requirementBody} />
                   </div>

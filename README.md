@@ -60,23 +60,25 @@ A working prototype with two parts.
 
 **2. A web page where the accountable person signs.**
 
-- A list of pull requests. Each one opens as a list of steps for the person:
-  first how the reviewer did on our test, then one step per requirement
-  point, then the sign-off.
-- Each requirement step shows what the reviewer says, whether it noticed
-  when we broke its evidence, and every line it cites, already open. One
-  click shows the same lines in the whole change.
-- Green points (the reviewer's answer held up) the person reads and
-  confirms. Yellow and red points the person decides: met or not met, plus
-  a verdict ("looks right" or "looks wrong") on every spot where the
-  reviewer missed a planted break.
+- A list of pull requests. Each one opens as an audit of its AI review, in
+  steps: first how the AI reviewer did on our test, then one step per
+  review objective, then the sign-off. (A review objective is one of the
+  checkable points the requirement, the issue, was split into.)
+- Each objective step states three things: what the AI reviewer claims,
+  how that claim did on our test, and what the person must do. Below it is
+  the code the AI reviewer cites as evidence, every reference already open.
+  One click shows the same lines in the full change.
+- The person rules on one explicit question per objective: does the cited
+  code prove that the change meets the objective? Where the AI reviewer
+  missed a planted mistake, the person first judges the real code at that
+  line ("is correct" or "is wrong").
 - The page shows one task at a time. Finishing a step opens the next one,
-  the question on a point appears once its red spots are judged, and
-  background detail stays folded until asked for. The list of pull requests
+  and background detail stays folded until asked for. A progress indicator
+  above the question shows every step and opens any of them, next to a
+  switch between the review and the full change. The list of pull requests
   is a narrow rail that opens on hover.
-- The steps can be taken in any order. The checks are saved in the browser,
-  so a review can be paused and continued later. They are thrown away if
-  the code shown changes.
+- The checks are saved in the browser, so an audit can be paused and
+  continued later. They are thrown away if the code shown changes.
 - A sign-off with the person's name. Accept unlocks only when every step is
   done and nothing is marked wrong. Reject and full read are always open.
 - A spot-check of the person: for a share of pull requests the code first

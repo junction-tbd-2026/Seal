@@ -11,8 +11,8 @@ const MARK_ROW: Record<Mark["tone"], string> = {
 };
 
 const MARK_TAG: Record<Mark["tone"], { text: string; style: string }> = {
-  blind: { text: "Check this yourself", style: "bg-missed text-white" },
-  finding: { text: "Reviewer flagged this", style: "bg-warn text-ink" },
+  blind: { text: "Judge this line", style: "bg-missed text-white" },
+  finding: { text: "Reported by the AI reviewer", style: "bg-warn text-ink" },
   evidence: { text: "Cited as evidence", style: "bg-brand text-white" },
 };
 

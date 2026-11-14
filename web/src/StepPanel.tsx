@@ -1,16 +1,19 @@
 import { DiffView, type Mark } from "./DiffView";
-import { fileName, lineRange } from "./lib";
+import { COLUMN, fileName, lineRange, objectiveName } from "./lib";
 import { excerptRows, findFile, pointCards, type FindingAnswer, type PointStep, type Progress } from "./progress";
 import type { FileDiff, Finding, Plant, SpotVerdict } from "./types";
 
-/** Two answers side by side. Pressing the chosen one again takes it back. */
+/**
+ * Two answers side by side. Pressing the chosen one again takes it back.
+ * An answer with a `short` form shows only that until it is chosen, so the row keeps its width.
+ */
 export function Choice<T extends string>({
   value,
   options,
   onPick,
 }: {
   value: T | undefined;
-  options: { value: T; label: string; good: boolean }[];
+  options: { value: T; label: string; short?: string; good: boolean }[];
   onPick: (value: T) => void;
 }) {
   return (
@@ -22,13 +25,14 @@ export function Choice<T extends string>({
             key={option.value}
             type="button"
             aria-pressed={chosen}
+            aria-label={option.label}
+            title={option.short ? option.label : undefined}
             onClick={() => onPick(option.value)}
             className={`press rounded-md px-3.5 py-1.5 text-[13.5px] font-bold ${
               chosen ? (option.good ? "bg-caught text-white" : "bg-missed text-white") : "bg-panel"
             }`}
           >
-            {chosen ? "✓ " : ""}
-            {option.label}
+            {chosen ? `✓ ${option.label}` : option.short ?? option.label}
           </button>
         );
       })}
@@ -36,19 +40,15 @@ export function Choice<T extends string>({
   );
 }
 
-const SPOT_OPTIONS: { value: SpotVerdict; label: string; good: boolean }[] = [
-  { value: "right", label: "Looks right", good: true },
-  { value: "wrong", label: "Looks wrong", good: false },
-];
-
 const FINDING_OPTIONS: { value: FindingAnswer; label: string; good: boolean }[] = [
-  { value: "not_real", label: "Not a problem", good: true },
-  { value: "real", label: "Real problem", good: false },
+  { value: "not_real", label: "Problem is not real", good: true },
+  { value: "real", label: "Problem is real", good: false },
 ];
 
-/** A few lines of the change, shown in place. The header opens the same lines in the whole change. */
+/** A few lines of the change, shown in place. The header says what the lines are and opens them in the full change. */
 function Excerpt({
   files,
+  name,
   path,
   start,
   end,
@@ -59,14 +59,16 @@ function Excerpt({
   children,
 }: {
   files: FileDiff[];
+  /** What the lines are to the audit, e.g. "Reference 1 of 3". */
+  name: string;
   path: string;
   start: number;
   end: number;
   marks: Mark[];
-  /** A short red label for an excerpt the person has to judge. */
+  /** A short red label for an excerpt with a line the person has to judge. */
   flag?: string;
   onOpen: (path: string, line: number) => void;
-  /** Shown above the code, for what must be read before it. */
+  /** Shown above the code, for what must be read before the code. */
   lead?: React.ReactNode;
   children?: React.ReactNode;
 }) {
@@ -78,49 +80,73 @@ function Excerpt({
         type="button"
         onClick={() => onOpen(path, start)}
         disabled={!file}
-        title={file ? `Open ${path} at line ${start} in the whole change` : path}
-        className="group flex w-full items-center gap-2.5 border-b border-hair px-4 py-2 text-left"
+        title={file ? `Open ${path} at line ${start} in the full change` : path}
+        className="group flex w-full flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-hair px-4 py-2 text-left"
       >
-        <span className="font-mono text-[12.5px] font-bold">
-          {fileName(path)}
-          <span className="text-faint">:{lineRange(start, end)}</span>
+        <span className="text-[12.5px] font-bold">{name}</span>
+        <span className="font-mono text-[12.5px] text-soft">
+          {fileName(path)}:{lineRange(start, end)}
         </span>
         {flag && <span className="rounded-sm bg-missed px-1.5 py-px text-[10.5px] font-bold uppercase tracking-wide text-white">{flag}</span>}
-        {file && <span className="ml-auto text-[12px] font-medium text-faint group-hover:text-brand group-hover:underline">Open in the whole change →</span>}
+        {file && <span className="ml-auto text-[12px] font-medium text-faint group-hover:text-brand group-hover:underline">Open in the full change →</span>}
       </button>
       {lead}
       {file && rows.length > 0 ? (
         <DiffView file={{ ...file, rows }} marks={marks} tags={false} className="py-1.5" />
       ) : (
-        <p className="px-4 py-3 text-[13px] text-soft">These lines are not in the change shown here.</p>
+        <p className="px-4 py-3 text-[13px] text-soft">The cited lines are not part of the change.</p>
       )}
       {children}
     </article>
   );
 }
 
-/** The question on a blind spot. The mistake was planted in a copy; the real code may well be fine. */
+/** The question on one red line. The mistake was planted in a test copy; the real code may well be correct. */
 function SpotCheck({ plant, verdict, onVerdict }: { plant: Plant; verdict: SpotVerdict | undefined; onVerdict: (id: string, verdict: SpotVerdict) => void }) {
-  const where = `${plant.line_end > plant.line_start ? "lines" : "line"} ${lineRange(plant.line_start, plant.line_end)}`;
+  const many = plant.line_end > plant.line_start;
+  const where = `${many ? "lines" : "line"} ${lineRange(plant.line_start, plant.line_end)}`;
+  const options: { value: SpotVerdict; label: string; good: boolean }[] = [
+    { value: "right", label: many ? "Code is correct" : `Line ${plant.line_start} is correct`, good: true },
+    { value: "wrong", label: many ? "Code is wrong" : `Line ${plant.line_start} is wrong`, good: false },
+  ];
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-hair bg-missed-wash px-4 py-3">
       <p className="min-w-[16rem] flex-1 text-[13.5px] leading-snug">
         <span className="text-soft">
-          In a test copy, the reviewer missed {plant.kind === "omission" ? "that we removed needed code" : "a mistake we planted"} on {where}.
+          In a test copy, the AI reviewer missed {plant.kind === "omission" ? "removed code" : "a planted mistake"} at {where}.
         </span>{" "}
-        <strong>Does the real code here look right?</strong>
+        <strong>Is the real code at {where} correct?</strong>
       </p>
-      <Choice value={verdict} options={SPOT_OPTIONS} onPick={(value) => onVerdict(plant.id, value)} />
+      <Choice value={verdict} options={options} onPick={(value) => onVerdict(plant.id, value)} />
     </div>
   );
 }
 
 const spotMark = (plant: Plant): Mark => ({ start: plant.line_start, end: plant.line_end, tone: "blind" });
 
+function Key({ style, children }: { style: string; children: React.ReactNode }) {
+  return (
+    <span className="whitespace-nowrap">
+      <i className={`mr-1.5 inline-block h-3 w-1.5 translate-y-0.5 ${style}`} />
+      {children}
+    </span>
+  );
+}
+
+/** Says what the code below is: not the change to review line by line, but what the AI reviewer offers as proof. */
+function Heading({ title, children }: { title: string; children?: React.ReactNode }) {
+  return (
+    <div>
+      <h2 className="text-[15px] font-bold">{title}</h2>
+      {children && <p className="mt-1 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-soft">{children}</p>}
+    </div>
+  );
+}
+
 function Scroller({ children }: { children: React.ReactNode }) {
   return (
     <div className="thin-scroll min-h-0 flex-1 overflow-y-auto bg-canvas">
-      <div className="space-y-4 px-8 py-6">{children}</div>
+      <div className={`${COLUMN} space-y-4 py-6`}>{children}</div>
     </div>
   );
 }
@@ -132,68 +158,82 @@ type Shared = {
   onSpot: (plantId: string, verdict: SpotVerdict) => void;
 };
 
-/** Every line the reviewer cites for one requirement point, open at once, with its blind spots marked. */
+/** The code the AI reviewer cites as evidence for one objective, every reference open at once. */
 export function PointBody({ step, files, progress, onOpen, onSpot, onWholeChange }: Shared & { step: PointStep; onWholeChange: () => void }) {
   const cards = pointCards(step);
   const { point } = step;
+  const cited = cards.filter((card) => card.cited).length;
+  const objective = objectiveName(point.id);
   if (cards.length === 0) {
     return (
       <Scroller>
         <div className="max-w-xl rounded-lg border-2 border-ink bg-panel px-5 py-5">
-          <p className="text-[15px] font-bold">The reviewer points to no lines for this</p>
-          <p className="mt-1 text-[13.5px] leading-snug text-soft">
-            {point.broad_evidence
-              ? "Its citations covered too many lines to count as evidence."
-              : point.dropped_evidence
-                ? "The lines it cited are not in this change."
-                : "It cited nothing."}{" "}
-            Read the whole change with this requirement in mind.
-          </p>
+          <h2 className="text-[15px] font-bold">Evidence: none. The AI reviewer cites no code for {objective}.</h2>
+          <p className="mt-1 text-[13.5px] leading-snug text-soft">Read the full change and decide whether the change meets {objective}.</p>
           <button type="button" onClick={onWholeChange} className="press mt-4 rounded-md bg-warn px-3.5 py-1.5 text-[13.5px] font-bold">
-            Read the whole change
+            Read the full change
           </button>
         </div>
       </Scroller>
     );
   }
+  let reference = 0;
   return (
     <Scroller>
-      {cards.map((card, index) => (
-        <Excerpt
-          key={index}
-          files={files}
-          path={card.file}
-          start={card.start}
-          end={card.end}
-          marks={[
-            ...card.spots.map(spotMark),
-            ...(card.cited ? [{ start: card.cited.line_start, end: card.cited.line_end, tone: "evidence" } as Mark] : []),
-          ]}
-          flag={card.spots.length > 0 ? "Check this yourself" : undefined}
-          onOpen={onOpen}
-        >
-          {card.spots.map((plant) => (
-            <SpotCheck key={plant.id} plant={plant} verdict={progress.spots[plant.id]} onVerdict={onSpot} />
-          ))}
-        </Excerpt>
-      ))}
+      <Heading
+        title={
+          cited > 0
+            ? `Evidence: ${cited} code ${cited === 1 ? "reference" : "references"} the AI reviewer cites as proof of ${objective}`
+            : `Evidence: none cited. Lines where the AI reviewer missed a planted mistake aimed at ${objective}`
+        }
+      >
+        {cited > 0 && <Key style="bg-brand">Blue lines: cited by the AI reviewer as evidence</Key>}
+        {step.spots.length > 0 && <Key style="bg-missed">Red lines: the AI reviewer missed a planted mistake at the same line</Key>}
+        <span>Other lines: context</span>
+      </Heading>
+      {cards.map((card, index) => {
+        if (card.cited) reference += 1;
+        return (
+          <Excerpt
+            key={index}
+            files={files}
+            name={card.cited ? `Reference ${reference} of ${cited}` : "Not cited by the AI reviewer"}
+            path={card.file}
+            start={card.start}
+            end={card.end}
+            marks={[
+              ...card.spots.map(spotMark),
+              ...(card.cited ? [{ start: card.cited.line_start, end: card.cited.line_end, tone: "evidence" } as Mark] : []),
+            ]}
+            flag={card.spots.length > 0 ? "Contains a red line to judge" : undefined}
+            onOpen={onOpen}
+          >
+            {card.spots.map((plant) => (
+              <SpotCheck key={plant.id} plant={plant} verdict={progress.spots[plant.id]} onVerdict={onSpot} />
+            ))}
+          </Excerpt>
+        );
+      })}
     </Scroller>
   );
 }
 
-/** Blind spots that belong to no requirement point. */
+/** Red lines that belong to no objective. */
 export function SpotsBody({ spots, files, progress, onOpen, onSpot }: Shared & { spots: Plant[] }) {
   return (
     <Scroller>
-      {spots.map((plant) => (
+      <Heading title="Real code at the lines where the AI reviewer missed a planted mistake">
+        <Key style="bg-missed">Red lines: the AI reviewer missed a planted mistake at the same line in a test copy</Key>
+      </Heading>
+      {spots.map((plant, index) => (
         <Excerpt
           key={plant.id}
           files={files}
+          name={`Line to judge ${index + 1} of ${spots.length}`}
           path={plant.file}
           start={plant.line_start}
           end={plant.line_end}
           marks={[spotMark(plant)]}
-          flag="Check this yourself"
           onOpen={onOpen}
         >
           <SpotCheck plant={plant} verdict={progress.spots[plant.id]} onVerdict={onSpot} />
@@ -203,7 +243,7 @@ export function SpotsBody({ spots, files, progress, onOpen, onSpot }: Shared & {
   );
 }
 
-/** Problems the reviewer reported in the real code. The person says whether each one is real. */
+/** Problems the AI reviewer reported in the real code. The person judges whether each reported problem is real. */
 export function FindingsBody({
   findings,
   files,
@@ -213,20 +253,24 @@ export function FindingsBody({
 }: Omit<Shared, "onSpot"> & { findings: Finding[]; onFinding: (index: string, answer: FindingAnswer) => void }) {
   return (
     <Scroller>
+      <Heading title="Real code at the lines the AI reviewer reported">
+        <Key style="bg-warn">Yellow lines: reported by the AI reviewer as a problem</Key>
+      </Heading>
       {findings.map((finding, index) => (
         <Excerpt
           key={index}
           files={files}
+          name={`Reported problem ${index + 1} of ${findings.length}`}
           path={finding.file}
           start={finding.line_start}
           end={finding.line_end}
           marks={[{ start: finding.line_start, end: finding.line_end, tone: "finding" }]}
           onOpen={onOpen}
           lead={
-            // Above the code: a finding can cover many lines, and the answer must stay in reach.
+            // Above the code: a reported problem can cover many lines, and the answer must stay in reach.
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-hair bg-warn-wash px-4 py-3">
               <p className="min-w-[16rem] flex-1 text-[13.5px] leading-snug">
-                <span className="text-soft">The reviewer says:</span> <strong>{finding.message}</strong>
+                <span className="text-soft">The AI reviewer reports:</span> <strong>{finding.message}</strong>
               </p>
               <Choice value={progress.findings[String(index)]} options={FINDING_OPTIONS} onPick={(value) => onFinding(String(index), value)} />
             </div>
