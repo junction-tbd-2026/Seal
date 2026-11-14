@@ -84,6 +84,18 @@ export function lineRange(start: number, end: number): string {
   return end > start ? `${start}–${end}` : `${start}`;
 }
 
+/** The centred column every part of a review shares, so the page has even white space on both sides. */
+export const COLUMN = "mx-auto w-full max-w-[64rem] px-8";
+
+/**
+ * The name of a review objective as the page shows it: "RO2" for the pipeline's "R2".
+ * "R" alone reads as "requirement", and the requirement is the whole issue, not one objective.
+ */
+export function objectiveName(id: string): string {
+  const number = /^R(\d+)$/i.exec(id.trim());
+  return number ? `RO${number[1]}` : id;
+}
+
 export function fileName(path: string): string {
   return path.split("/").pop() ?? path;
 }

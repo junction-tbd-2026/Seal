@@ -1,4 +1,4 @@
-import { sameFile } from "./lib";
+import { objectiveName, sameFile } from "./lib";
 import type { EvidenceRef, Exam, FileDiff, Finding, Plant, PointView, Reviewer, Row, SignOff, SpotVerdict } from "./types";
 
 /**
@@ -127,21 +127,24 @@ export function codeFingerprint(files: FileDiff[]): string {
   return `${rows}-${(hash >>> 0).toString(16)}`;
 }
 
-/** "verified": the reviewer's answer held up. "unproven": nothing backs it. "risk": it failed, or says not met. */
+/** "verified": the AI reviewer's claim passed our test. "unproven": nothing backs the claim. "risk": the claim failed the test, or is "not met". */
 export type Tone = "verified" | "unproven" | "risk";
+
+/** How the AI reviewer's claim on one objective did when we broke the code it cites. */
+export type ClaimTest = { verdict: string; detail: string };
 
 export type PointStep = {
   id: string;
   kind: "point";
   point: PointView;
-  /** Places where the reviewer missed a break we planted against this point. */
+  /** Lines where the AI reviewer missed a mistake we planted against this objective. */
   spots: Plant[];
   tone: Tone;
-  chip: string;
-  /** What the reviewer says and how that answer did on our test. */
-  why: string;
-  /** What the person is asked to do. */
-  todo: string;
+  /** What the AI reviewer claims about the objective. */
+  claim: string;
+  /** Whether the claim is one the person audits against cited code ("met"), or there is no such claim. */
+  claimsMet: boolean;
+  test: ClaimTest;
 };
 
 export type Step =
@@ -151,70 +154,86 @@ export type Step =
   | { id: "findings"; kind: "findings"; findings: Finding[] }
   | { id: "sign"; kind: "sign" };
 
-/** How far the reviewer's answer on one point can be believed, and what that asks of the person. */
-function describePoint(point: PointView, spots: Plant[]): { tone: Tone; chip: string; why: string; todo: string } {
-  const redSpots = spots.length === 1 ? "the red spot" : `the ${spots.length} red spots`;
+const breaks = (count: number) => `${count} planted ${count === 1 ? "mistake" : "mistakes"}`;
+
+/** The AI reviewer's claim on one objective, and how that claim did on our test. */
+function describePoint(point: PointView, spots: Plant[]): Pick<PointStep, "tone" | "claim" | "claimsMet" | "test"> {
+  const objective = objectiveName(point.id);
   if (point.status === "not_met") {
     return {
       tone: "risk",
-      chip: "Says not met",
-      why: "The reviewer says the change does not do this.",
-      todo: spots.length > 0 ? `Check ${redSpots}, then decide whether it is right.` : "Read the lines and decide whether it is right.",
+      claim: `The change does not meet ${objective}.`,
+      claimsMet: false,
+      test: { verdict: "Not tested", detail: "Only “met” claims are tested with planted mistakes." },
     };
   }
+  const claimsMet = point.status === "met";
+  const claim = claimsMet ? `The change meets ${objective}.` : `No claim. The AI reviewer could not decide ${objective}.`;
   const missed = spots.length > 0 || point.noticed === "no" || point.noticed === "partly";
   if (missed) {
-    const claim = point.status === "met" ? "The reviewer says this is met, but it" : "The reviewer could not tell, and it";
-    const tested =
-      point.broken_total > 0
-        ? `missed ${point.broken_total - point.broken_noticed} of the ${point.broken_total} breaks we planted in the lines it cites.`
-        : `missed ${spots.length === 1 ? "a break" : `${spots.length} breaks`} we planted against this point.`;
     return {
       tone: "risk",
-      chip: "Missed our breaks",
-      why: `${claim} ${tested}`,
-      todo: spots.length > 0 ? `Check ${redSpots} yourself, then decide.` : "Read the lines closely, then decide.",
+      claim,
+      claimsMet,
+      test: {
+        verdict: "Failed",
+        detail:
+          point.broken_total > 0
+            ? `The AI reviewer missed ${point.broken_total - point.broken_noticed} of ${breaks(point.broken_total)} in the cited lines.`
+            : `The AI reviewer missed ${breaks(spots.length)} aimed at ${objective}.`,
+      },
     };
   }
-  if (point.status === "cannot_tell") {
-    const cited = point.broad_evidence
-      ? " Its citations covered too many lines to count."
-      : point.dropped_evidence
-        ? " It cited lines that are not in this change."
-        : "";
-    return { tone: "unproven", chip: "Can't tell", why: `The reviewer could not decide this point.${cited}`, todo: "Decide it yourself." };
+  if (!claimsMet) {
+    return {
+      tone: "unproven",
+      claim,
+      claimsMet,
+      test: {
+        verdict: "Nothing to test",
+        detail: point.broad_evidence
+          ? "The citations of the AI reviewer covered too many lines to count as evidence."
+          : point.dropped_evidence
+            ? "The AI reviewer cited lines that are not part of the change."
+            : "The AI reviewer cited no code.",
+      },
+    };
   }
   if (point.noticed === "unstable") {
     return {
       tone: "unproven",
-      chip: "Unstable answer",
-      why: "The reviewer says this is met, but it answered differently on two identical reviews.",
-      todo: "Read the lines and decide yourself.",
+      claim,
+      claimsMet,
+      test: { verdict: "Unreliable", detail: "The AI reviewer gave two different answers in two identical reviews." },
     };
   }
   if (point.tests_only) {
     return {
       tone: "unproven",
-      chip: "Only a test as proof",
-      why: "The reviewer says this is met, but every line it cites is in a test, and the tests were not run.",
-      todo: "Read the lines and decide yourself.",
+      claim,
+      claimsMet,
+      test: { verdict: "Weak evidence", detail: "Every cited line is test code, and the tests were not run." },
     };
   }
   if (point.noticed === "yes") {
     return {
       tone: "verified",
-      chip: "Held up",
-      why: `The reviewer says this is met, and it noticed ${point.broken_total === 1 ? "the break" : `all ${point.broken_total} breaks`} we planted in the lines it cites.`,
-      todo: "Read the lines and confirm.",
+      claim,
+      claimsMet,
+      test: {
+        verdict: "Passed",
+        detail: `The AI reviewer noticed ${point.broken_total === 1 ? "the 1 planted mistake" : `all ${breaks(point.broken_total)}`} in the cited lines.`,
+      },
     };
   }
   return {
     tone: "unproven",
-    chip: "Not tested",
-    why: point.aimed_elsewhere
-      ? "The reviewer says this is met, but our breaks fell outside the lines it cites, so that answer is untested."
-      : "The reviewer says this is met, but we planted nothing against this point, so that answer is untested.",
-    todo: "Read the lines and decide yourself.",
+    claim,
+    claimsMet,
+    test: {
+      verdict: "Not tested",
+      detail: point.aimed_elsewhere ? "No planted mistake landed inside the cited lines." : `No mistake was planted against ${objective}.`,
+    },
   };
 }
 
@@ -264,15 +283,9 @@ export function stepState(step: Step, progress: Progress, signed: SignOff | null
     case "point": {
       const { left, wrong } = spotsState(step.spots, progress);
       const answer = progress.points[step.point.id];
-      const said =
-        answer === "met"
-          ? step.tone === "verified"
-            ? "You confirmed it is met"
-            : "You say it is met"
-          : answer === "not_met"
-            ? "You say it is not met"
-            : null;
-      const spotNote = wrong > 0 ? `${wrong} ${wrong === 1 ? "spot looks" : "spots look"} wrong` : null;
+      const objective = objectiveName(step.point.id);
+      const said = answer === "met" ? `Your verdict: ${objective} is met` : answer === "not_met" ? `Your verdict: ${objective} is not met` : null;
+      const spotNote = wrong > 0 ? `${wrong} red ${wrong === 1 ? "line" : "lines"} judged wrong` : null;
       return {
         done: left === 0 && answer != null,
         flagged: wrong > 0 || answer === "not_met",
@@ -285,7 +298,14 @@ export function stepState(step: Step, progress: Progress, signed: SignOff | null
       return {
         done: left === 0,
         flagged: wrong > 0,
-        answer: decided === 0 ? null : wrong > 0 ? `${wrong} ${wrong === 1 ? "spot looks" : "spots look"} wrong` : left === 0 ? "All look right" : `${decided} of ${step.spots.length} checked`,
+        answer:
+          decided === 0
+            ? null
+            : wrong > 0
+              ? `${wrong} red ${wrong === 1 ? "line" : "lines"} judged wrong`
+              : left === 0
+                ? "All red lines judged correct"
+                : `${decided} of ${step.spots.length} red lines judged`,
       };
     }
     case "findings": {
@@ -299,10 +319,10 @@ export function stepState(step: Step, progress: Progress, signed: SignOff | null
           decided === 0
             ? null
             : real > 0
-              ? `${real} real ${real === 1 ? "problem" : "problems"}`
+              ? `${real} reported ${real === 1 ? "problem" : "problems"} judged real`
               : decided === answers.length
-                ? "No real problem"
-                : `${decided} of ${answers.length} checked`,
+                ? "No reported problem judged real"
+                : `${decided} of ${answers.length} reported problems judged`,
       };
     }
     case "sign":
@@ -310,22 +330,27 @@ export function stepState(step: Step, progress: Progress, signed: SignOff | null
   }
 }
 
-/** What a step is called in the list and in its header. */
-export function stepLabel(step: Step): { eyebrow: string; title: string } {
+/** What a step is called: a short name for the progress indicator, and its heading. */
+export function stepLabel(step: Step): { short: string; eyebrow: string; title: string } {
   switch (step.kind) {
     case "intro":
-      return { eyebrow: "Before you start", title: "How much is the AI reviewer's opinion worth?" };
+      return { short: "Start", eyebrow: "Start of the audit", title: "You are auditing the AI reviewer" };
     case "point":
-      return { eyebrow: `Requirement ${step.point.id}`, title: step.point.text };
+      return { short: objectiveName(step.point.id), eyebrow: `Review objective ${objectiveName(step.point.id)}`, title: step.point.text };
     case "spots":
-      return { eyebrow: "Other blind spots", title: `${step.spots.length === 1 ? "A spot" : `${step.spots.length} spots`} where the reviewer missed our breaks` };
+      return {
+        short: "Missed",
+        eyebrow: "Missed planted mistakes",
+        title: `Judge ${step.spots.length === 1 ? "the line" : `the ${step.spots.length} lines`} where the AI reviewer missed a planted mistake`,
+      };
     case "findings":
       return {
-        eyebrow: "Reviewer's findings",
-        title: `${step.findings.length === 1 ? "A problem" : `${step.findings.length} problems`} the reviewer reported in the real code`,
+        short: "Reported",
+        eyebrow: "Reported problems",
+        title: `Judge ${step.findings.length === 1 ? "the problem" : `the ${step.findings.length} problems`} the AI reviewer reported`,
       };
     case "sign":
-      return { eyebrow: "Last step", title: "Sign off" };
+      return { short: "Sign", eyebrow: "Sign-off", title: "Sign your audit" };
   }
 }
 
