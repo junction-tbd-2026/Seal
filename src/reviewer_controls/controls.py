@@ -88,8 +88,10 @@ def score(
 
     if not plant.should_be_flagged:
         if plant.near:
+            # An alarm at those lines, by pointing at the harmless edit or by taking back "met",
+            # shows the reviewer cannot tell a break from a harmless edit there.
             outcome.near_point = plant.near
-            outcome.near_alarm = withdrew(plant.near)
+            outcome.near_alarm = outcome.flagged or withdrew(plant.near)
         if any(withdrew(point.id) for point in original.points):
             outcome.flagged = True
             outcome.correct = False
@@ -98,6 +100,32 @@ def score(
     if any(finding_hits_plant(f, plant) for f in narrow):
         outcome.inconclusive = True
     return outcome
+
+
+def unstable_points(
+    points: Sequence[RequirementPoint], original: ReviewResult, repeat: ReviewResult
+) -> List[str]:
+    """Points the reviewer itself answered differently on two identical reviews.
+
+    The reviewer's own answers are compared. Our citation check can lower one of two identical
+    "met" answers, for instance when a citation is too broad; that is not the reviewer wavering.
+    """
+    return [point.id for point in points if claimed_status(original, point.id) != claimed_status(repeat, point.id)]
+
+
+def rescore(report: RunReport) -> RunReport:
+    """Score a saved run again from its saved reviews, with the current rules. No model is called."""
+    if report.original_review is None:
+        return report
+    if report.repeat_review is not None and not report.repeat_review.error:
+        report.unstable_points = unstable_points(report.requirement_points, report.original_review, report.repeat_review)
+    reviews = {review.variant_id: review for review in report.variant_reviews}
+    report.outcomes = [
+        score(plant, reviews[plant.id], report.original_review, report.unstable_points)
+        for plant in report.plants
+        if plant.id in reviews and not reviews[plant.id].error
+    ]
+    return report
 
 
 def cited_targets(reviews: Sequence[ReviewResult]) -> Dict[str, List[dict]]:
@@ -187,11 +215,7 @@ def run_controls(
         if repeat_review.error:
             report.notes.append("The repeat review failed, so chance changes of answer were not ruled out.")
         else:
-            report.unstable_points = [
-                point.id
-                for point in report.requirement_points
-                if point_status(original_review, point.id) != point_status(repeat_review, point.id)
-            ]
+            report.unstable_points = unstable_points(report.requirement_points, original_review, repeat_review)
             if report.unstable_points:
                 report.notes.append(
                     "The reviewer answered differently on two identical reviews for {}; those points are not scored.".format(

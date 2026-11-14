@@ -8,12 +8,12 @@ read the ranges, not the fractions.
 
 ## Pull request #1: Crash on a closed generic struct from a referenced assembly
 
-4 files. 10 planted edits (4 bug, 3 harmless, 3 omission), written by DeepSeek-V4.1-Flash.
+4 files. 10 planted edits (6 bug, 4 harmless), written by DeepSeek-V4.1-Flash.
 
 | Reviewer | Verdict on the real change | Planted defects caught | Supported claim | False alarms | Verdict moved when requirement altered | No answer |
 |---|---|---|---|---|---|---|
-| nemotron-3.5-super-vl | meets requirement | 5 of 7 | The true catch rate is between 36% and 92% (95% interval). | 2 of 3 | yes | 0 |
-| gemma-4-31B-it | meets requirement | 0 of 7 | The true catch rate is between 0% and 35% (95% interval). | 0 of 3 | yes | 0 |
+| nemotron-3.5-super-vl | meets requirement | 3 of 4 | The true catch rate is between 30% and 95% (95% interval). | 1 of 3 | yes | 2 |
+| gemma-4-31B-it | meets requirement | 1 of 6 | The true catch rate is between 3% and 56% (95% interval). | 0 of 3 | yes | 1 |
 
 ## Pull request #2: Analyzer does not run when SuppressSourceGeneration is true
 
@@ -40,5 +40,5 @@ Not tested yet.
 
 | Reviewer | Planted defects caught | 95% interval | Bugs caught | Omissions caught | False alarms | No answer |
 |---|---|---|---|---|---|---|
-| nemotron-3.5-super-vl | 11 of 14 | 52% to 92% | 7 of 8 | 4 of 6 | 2 of 6 | 1 |
-| gemma-4-31B-it | 1 of 13 | 1% to 33% | 1 of 8 | 0 of 5 | 0 of 6 | 1 |
+| nemotron-3.5-super-vl | 9 of 11 | 52% to 95% | 7 of 8 | 2 of 3 | 1 of 6 | 3 |
+| gemma-4-31B-it | 2 of 12 | 5% to 45% | 2 of 10 | 0 of 2 | 0 of 6 | 2 |

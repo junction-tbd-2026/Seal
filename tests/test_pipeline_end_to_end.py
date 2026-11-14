@@ -483,6 +483,25 @@ class PairedPlantingTests(unittest.TestCase):
         outcome = score(plant, withdrawn, original)
         self.assertEqual((outcome.correct, outcome.near_alarm), (False, True))
 
+    def test_our_citation_check_does_not_make_a_steady_answer_look_unstable(self):
+        from reviewer_controls.controls import unstable_points
+        from reviewer_controls.models import PointAssessment, ReviewResult
+        first = ReviewResult(reviewer="r", variant_id="original", points=[PointAssessment(id="R1", status="met", claimed_status="met")])
+        # Same answer from the reviewer; only its citation was too broad the second time.
+        second = ReviewResult(reviewer="r", variant_id="repeat", points=[PointAssessment(id="R1", status="cannot_tell", claimed_status="met")])
+        self.assertEqual(unstable_points(self.points[:1], first, second), [])
+        wavered = ReviewResult(reviewer="r", variant_id="repeat", points=[PointAssessment(id="R1", status="not_met", claimed_status="not_met")])
+        self.assertEqual(unstable_points(self.points[:1], first, wavered), ["R1"])
+
+    def test_pointing_at_a_harmless_edit_counts_as_an_alarm_on_its_point(self):
+        from reviewer_controls.controls import score
+        from reviewer_controls.models import Finding, Plant, PointAssessment, ReviewResult
+        plant = Plant(id="p1", kind=KIND_HARMLESS, description="", file="src/Calc.cs", line_start=9, line_end=9, near="R1")
+        original = ReviewResult(reviewer="r", variant_id="original", points=[PointAssessment(id="R1", status="met", claimed_status="met")])
+        copy = ReviewResult(reviewer="r", variant_id="p1", findings=[Finding("src/Calc.cs", 9, 9, "suspicious")],
+                            points=[PointAssessment(id="R1", status="met", claimed_status="met")])
+        self.assertEqual(score(plant, copy, original).near_alarm, True)
+
     def test_a_very_broad_finding_in_the_real_change_does_not_rule_a_copy_out(self):
         from reviewer_controls.controls import score
         from reviewer_controls.models import Finding, Plant, ReviewResult
