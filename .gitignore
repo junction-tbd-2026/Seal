@@ -6,6 +6,10 @@
 *.key
 !keys.example.env
 
+# Front end
+web/node_modules/
+web/dist/
+
 # Python
 __pycache__/
 *.pyc
@@ -24,3 +28,6 @@ junction2026/
 
 # OS
 .DS_Store
+
+# TypeScript build cache
+*.tsbuildinfo

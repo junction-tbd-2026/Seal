@@ -10,7 +10,7 @@ from .models import RunReport
 from .stats import floor_if_all_caught, wilson_interval
 
 
-def _supported_claim(caught: int, total: int) -> str:
+def supported_claim(caught: int, total: int) -> str:
     if total == 0:
         return "No planted defects were scored, so nothing can be claimed about the reviewer."
     if caught == total:
@@ -56,7 +56,7 @@ def render_card(report: RunReport) -> str:
 
     add("## How far to trust that review")
     add("")
-    add("- Planted defects: {}".format(_supported_claim(counts["defects_caught"], counts["defects_total"])))
+    add("- Planted defects: {}".format(supported_claim(counts["defects_caught"], counts["defects_total"])))
     if counts["harmless_total"]:
         add("- Harmless edits: {} of {} wrongly flagged (false alarms).".format(
             counts["false_alarms"], counts["harmless_total"]

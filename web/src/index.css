@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+/* Paper-and-ink palette. One accent; green and red are reserved for results. */
+@theme {
+  --color-paper: #f4f1e8;
+  --color-sheet: #fbfaf5;
+  --color-ink: #1d1c1a;
+  --color-soft: #5d584f;
+  --color-faint: #8b857a;
+  --color-rule: #d9d3c5;
+  --color-accent: #1f4e5f;
+  --color-caught: #2c6b4e;
+  --color-caught-wash: #e3efe6;
+  --color-missed: #b03a28;
+  --color-missed-wash: #f6e4df;
+  --color-warn: #946a12;
+  --color-warn-wash: #f5ecd3;
+
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: #cfe0e5;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}

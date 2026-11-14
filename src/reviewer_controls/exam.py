@@ -1,0 +1,248 @@
+"""Shapes saved runs into what the web page shows: one change, its planted variants,
+and how each reviewer did on exactly the same variants.
+
+Nothing here depends on the web framework, so it can be tested on its own.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from .card import supported_claim
+from .diffs import _HUNK_HEADER, split_diff
+from .matcher import finding_hits_plant
+from .models import KIND_HARMLESS, Finding, Plant
+
+SIGNOFF_FILE = "signoffs.jsonl"
+
+
+def structured_diff(diff: str) -> List[Dict[str, Any]]:
+    """A diff as rows the page can draw: line number, kind (add, del, ctx, gap) and text."""
+    files = []
+    for file_diff in split_diff(diff):
+        rows: List[Dict[str, Any]] = []
+        new_line = 0
+        in_hunk = False
+        for line in file_diff.text.splitlines():
+            header = _HUNK_HEADER.match(line)
+            if header:
+                if rows:
+                    rows.append({"n": None, "kind": "gap", "text": ""})
+                new_line = int(header.group(3))
+                in_hunk = True
+                continue
+            if not in_hunk or line.startswith("\\"):
+                continue
+            if line.startswith("-"):
+                rows.append({"n": None, "kind": "del", "text": line[1:]})
+            elif line.startswith("+"):
+                rows.append({"n": new_line, "kind": "add", "text": line[1:]})
+                new_line += 1
+            else:
+                rows.append({"n": new_line, "kind": "ctx", "text": line[1:]})
+                new_line += 1
+        files.append(
+            {
+                "path": file_diff.path,
+                "status": "new" if file_diff.is_new else "deleted" if file_diff.is_deleted else "modified",
+                "added": file_diff.added_line_count,
+                "removed": sum(1 for row in rows if row["kind"] == "del"),
+                "rows": rows,
+            }
+        )
+    return files
+
+
+def requirement_title(text: str, fallback: str) -> str:
+    first = text.strip().splitlines()[0] if text.strip() else ""
+    match = re.match(r"#\s*Requirement\s*#?\S*:\s*(.+)", first)
+    return match.group(1).strip() if match else (first.lstrip("# ").strip() or fallback)
+
+
+def load_runs(results_dir: Path) -> List[Dict[str, Any]]:
+    """Every saved run report, newest first. Plant files and unreadable files are skipped."""
+    runs = []
+    for path in results_dir.glob("*.json"):
+        if "__plants__" in path.name:
+            continue
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or "change" not in data or "plants" not in data:
+            continue
+        data["_file"] = path.name
+        runs.append(data)
+    return sorted(runs, key=lambda run: run.get("created_at", ""), reverse=True)
+
+
+def _signature(run: Dict[str, Any]) -> Tuple:
+    """Two runs sat the same exam when their planted variants are identical."""
+    return tuple((p["id"], p["file"], p["line_start"], p["line_end"], p["description"]) for p in run["plants"])
+
+
+def _result(plant: Dict[str, Any], review: Optional[Dict[str, Any]], outcome: Optional[Dict[str, Any]]) -> str:
+    if review is None or review.get("error"):
+        return "failed"
+    if outcome is None:
+        return "failed"
+    if outcome.get("inconclusive"):
+        return "inconclusive"
+    if plant["kind"] == KIND_HARMLESS:
+        return "false_alarm" if outcome["flagged"] else "left_alone"
+    return "caught" if outcome["flagged"] else "missed"
+
+
+def _reviewer_view(run: Dict[str, Any]) -> Dict[str, Any]:
+    plants = run["plants"]
+    reviews = {r["variant_id"]: r for r in run.get("variant_reviews", [])}
+    outcomes = {o["plant_id"]: o for o in run.get("outcomes", [])}
+    results = {p["id"]: _result(p, reviews.get(p["id"]), outcomes.get(p["id"])) for p in plants}
+
+    defects = [p for p in plants if p["kind"] != KIND_HARMLESS and results[p["id"]] in ("caught", "missed")]
+    harmless = [p for p in plants if p["kind"] == KIND_HARMLESS and results[p["id"]] in ("left_alone", "false_alarm")]
+    caught = sum(1 for p in defects if results[p["id"]] == "caught")
+
+    # What the reviewer said at the planted spot, so the page can quote it.
+    said: Dict[str, str] = {}
+    for plant in plants:
+        review = reviews.get(plant["id"]) or {}
+        located = Plant(id=plant["id"], kind=plant["kind"], description="", file=plant["file"],
+                        line_start=plant["line_start"], line_end=plant["line_end"])
+        for raw in review.get("findings", []):
+            finding = Finding(file=raw["file"], line_start=raw["line_start"], line_end=raw["line_end"],
+                              message=raw.get("message", ""), severity=raw.get("severity", "unknown"))
+            if finding_hits_plant(finding, located):
+                said[plant["id"]] = finding.message
+                break
+
+    original = run.get("original_review") or {}
+    return {
+        "name": run["reviewer"],
+        "run_file": run["_file"],
+        "created_at": run.get("created_at", ""),
+        "verdict": original.get("meets_requirement"),
+        "review_failed": bool(original.get("error")),
+        "findings": original.get("findings", []),
+        "refused_to_decide": original.get("refused_to_decide", []),
+        "results": results,
+        "said": said,
+        "counts": {
+            "defects_total": len(defects),
+            "defects_caught": caught,
+            "harmless_total": len(harmless),
+            "false_alarms": sum(1 for p in harmless if results[p["id"]] == "false_alarm"),
+            "failed": sum(1 for value in results.values() if value == "failed"),
+            "inconclusive": sum(1 for value in results.values() if value == "inconclusive"),
+        },
+        "claim": supported_claim(caught, len(defects)),
+        "requirement_flip_changed_verdict": run.get("requirement_flip_changed_verdict"),
+        "read_yourself": [p["id"] for p in defects if results[p["id"]] == "missed"],
+        "tokens_in": run.get("prompt_tokens", 0),
+        "tokens_out": run.get("completion_tokens", 0),
+        "seconds": run.get("wall_seconds", 0.0),
+        "reviews": 1 + len(run.get("variant_reviews", [])) + (1 if run.get("altered_requirement_review") else 0),
+        "notes": run.get("notes", []),
+    }
+
+
+def list_changes(results_dir: Path) -> List[Dict[str, Any]]:
+    """Changes that have at least one saved run, newest run first."""
+    seen: Dict[str, Dict[str, Any]] = {}
+    for run in load_runs(results_dir):
+        change = run["change"]
+        entry = seen.setdefault(
+            change["id"],
+            {
+                "id": change["id"],
+                "requirement_id": change["requirement_id"],
+                "title": requirement_title(change.get("requirement_text", ""), change["id"]),
+                "latest_run": run.get("created_at", ""),
+                "reviewers": [],
+            },
+        )
+        if run["reviewer"] not in entry["reviewers"]:
+            entry["reviewers"].append(run["reviewer"])
+    return list(seen.values())
+
+
+def build_exam(results_dir: Path, change_id: str) -> Optional[Dict[str, Any]]:
+    """The newest set of planted variants for a change, with every reviewer that was tested on it."""
+    runs = [run for run in load_runs(results_dir) if run["change"]["id"] == change_id]
+    if not runs:
+        return None
+    newest = runs[0]
+    signature = _signature(newest)
+    by_reviewer: Dict[str, Dict[str, Any]] = {}
+    for run in runs:  # newest first, so the first run seen per reviewer wins
+        if _signature(run) == signature and run["reviewer"] not in by_reviewer:
+            by_reviewer[run["reviewer"]] = run
+
+    change = newest["change"]
+    return {
+        "change": {
+            "id": change["id"],
+            "requirement_id": change["requirement_id"],
+            "requirement_title": requirement_title(change.get("requirement_text", ""), change["id"]),
+            "requirement_text": change.get("requirement_text", ""),
+            "files": structured_diff(change.get("diff", "")),
+        },
+        "planter": newest.get("planter", ""),
+        "created_at": newest.get("created_at", ""),
+        "build_checked": bool(newest.get("build_checked")),
+        "altered_requirement": newest.get("altered_requirement", ""),
+        "plants": [
+            {
+                "id": p["id"],
+                "kind": p["kind"],
+                "difficulty": p.get("difficulty", "medium"),
+                "description": p["description"],
+                "file": p["file"],
+                "line_start": p["line_start"],
+                "line_end": p["line_end"],
+                "patch": structured_diff(p.get("patch", "")),
+            }
+            for p in newest["plants"]
+        ],
+        "reviewers": [_reviewer_view(run) for run in sorted(by_reviewer.values(), key=lambda r: r.get("created_at", ""))],
+        "signoffs": signoffs_for(results_dir, change_id),
+    }
+
+
+def record_signoff(results_dir: Path, change_id: str, reviewer: str, name: str, decision: str) -> Dict[str, Any]:
+    """Append a named human's decision. A sign-off is never edited, only added to."""
+    name = name.strip()
+    if not name:
+        raise ValueError("a sign-off needs a name")
+    if decision not in ("accept", "reject", "full_read"):
+        raise ValueError("decision must be accept, reject or full_read")
+    entry = {
+        "change_id": change_id,
+        "reviewer": reviewer,
+        "name": name[:120],
+        "decision": decision,
+        "signed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    results_dir.mkdir(parents=True, exist_ok=True)
+    with (results_dir / SIGNOFF_FILE).open("a") as handle:
+        handle.write(json.dumps(entry) + "\n")
+    return entry
+
+
+def signoffs_for(results_dir: Path, change_id: str) -> List[Dict[str, Any]]:
+    path = results_dir / SIGNOFF_FILE
+    if not path.is_file():
+        return []
+    entries = []
+    for line in path.read_text().splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("change_id") == change_id:
+            entries.append(entry)
+    return entries

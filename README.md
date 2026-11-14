@@ -44,7 +44,10 @@ proven to be real defects.
 | `src/reviewer_controls/config.py` | Loads keys from outside the project; never prints them |
 | `.githooks/pre-commit` | Blocks commits that contain a key |
 | `keys.example.env` | Template for the keys file (no real values) |
-| `results/` | Run outputs as plain JSON, read later by the web page |
+| `src/reviewer_controls/exam.py` | Shapes saved runs into what the page shows |
+| `src/reviewer_controls/server.py` | Web backend (FastAPI): serves saved runs, records sign-offs |
+| `web/` | The page (React, TypeScript, Vite, Tailwind, Motion) |
+| `results/` | Run outputs as plain JSON, read by the web page |
 | `work/` | Local clone of the sample repository (not committed) |
 
 ## Set up
@@ -70,6 +73,31 @@ PYTHONPATH=src python3 -m reviewer_controls.pipeline --change ju26-issue-2283 --
 ```
 
 The run writes a report (`.json`) and a sign-off card (`.card.md`) to `results/`.
+
+## The web page
+
+Two installs, once:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+```
+
+```bash
+npm --prefix web install
+```
+
+Then start the backend and the page in two terminals and open http://localhost:5173:
+
+```bash
+.venv/bin/uvicorn reviewer_controls.server:app --app-dir src --port 8000
+```
+
+```bash
+npm --prefix web run dev
+```
+
+The page shows the newest saved run of each change. The backend reads result
+files only; it never loads the keys file and never calls a model.
 
 Tests need no keys:
 
