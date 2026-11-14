@@ -1,52 +1,84 @@
 @import "tailwindcss";
+@import "@fontsource-variable/bricolage-grotesque";
+@import "@fontsource-variable/jetbrains-mono";
 
-/* Paper-and-ink palette. One accent; green and red are reserved for results. */
+/* Bold and graphic: thick ink outlines, flat blocks of colour, hard shadows. */
 @theme {
-  --color-paper: #f4f1e8;
-  --color-sheet: #fbfaf5;
-  --color-ink: #1d1c1a;
-  --color-soft: #5d584f;
-  --color-faint: #8b857a;
-  --color-rule: #d9d3c5;
-  --color-accent: #1f4e5f;
-  --color-caught: #2c6b4e;
-  --color-caught-wash: #e3efe6;
-  --color-missed: #b03a28;
-  --color-missed-wash: #f6e4df;
-  --color-warn: #946a12;
-  --color-warn-wash: #f5ecd3;
+  --color-ink: #121212;
+  --color-soft: #4a4a48;
+  --color-faint: #7b7b78;
+  --color-canvas: #e7e9ec;
+  --color-panel: #ffffff;
+  --color-line: #121212;
+  --color-hair: #c9cdd3;
 
-  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --color-brand: #2b50ff;
+  --color-brand-wash: #dfe6ff;
+  --color-caught: #10a561;
+  --color-caught-wash: #d6f5e4;
+  --color-missed: #ff4a2e;
+  --color-missed-wash: #ffe1da;
+  --color-warn: #ffc31f;
+  --color-warn-wash: #fff2c6;
+
+  --font-sans: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, Menlo, monospace;
+
+  --shadow-hard: 4px 4px 0 var(--color-ink);
+  --shadow-hard-sm: 2px 2px 0 var(--color-ink);
 }
 
-html {
-  scroll-behavior: smooth;
+html,
+body,
+#root {
+  height: 100%;
 }
 
 body {
   margin: 0;
-  background: var(--color-paper);
+  background: var(--color-canvas);
   color: var(--color-ink);
   font-family: var(--font-sans);
-  font-size: 16px;
-  line-height: 1.55;
+  font-size: 15px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
 }
 
 ::selection {
-  background: #cfe0e5;
+  background: var(--color-warn);
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 3px solid var(--color-brand);
   outline-offset: 2px;
 }
 
+/* A pressable block: thick outline and a hard shadow that collapses when pressed. */
+.press {
+  border: 2px solid var(--color-ink);
+  box-shadow: var(--shadow-hard-sm);
+  transition: transform 80ms ease-out, box-shadow 80ms ease-out, background-color 120ms;
+}
+.press:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--color-ink);
+}
+.press:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 var(--color-ink);
+}
+.press:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-faint) transparent;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  html {
-    scroll-behavior: auto;
+  .press {
+    transition: none;
   }
 }

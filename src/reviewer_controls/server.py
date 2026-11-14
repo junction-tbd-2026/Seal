@@ -14,10 +14,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .exam import build_exam, list_changes, record_signoff
+from .exam import build_exam, list_changes, list_pulls, record_signoff
 
 ROOT = Path(__file__).resolve().parents[2]
 RESULTS_DIR = Path(os.environ.get("RESULTS_DIR") or ROOT / "results")
+PULLS_FILE = Path(os.environ.get("PULLS_FILE") or ROOT / "pull_requests.json")
 WEB_DIST = ROOT / "web" / "dist"
 
 app = FastAPI(title="Reviewer Controls", docs_url="/api/docs", openapi_url="/api/openapi.json")
@@ -38,6 +39,11 @@ def health() -> dict:
 @app.get("/api/changes")
 def changes() -> list:
     return list_changes(RESULTS_DIR)
+
+
+@app.get("/api/pulls")
+def pulls() -> dict:
+    return list_pulls(PULLS_FILE, RESULTS_DIR)
 
 
 @app.get("/api/exam/{change_id}")

@@ -5,7 +5,7 @@ function inline(text: string): ReactNode[] {
   return text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).map((part, index) => {
     if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
       return (
-        <code key={index} className="rounded bg-paper px-1 py-0.5 font-mono text-[0.85em]">
+        <code key={index} className="rounded-sm border border-hair bg-canvas px-1 font-mono text-[0.85em]">
           {part.slice(1, -1)}
         </code>
       );
@@ -36,7 +36,7 @@ export function Prose({ text }: { text: string }) {
       while (index < lines.length && !lines[index].trim().startsWith("```")) code.push(lines[index++]);
       index += 1;
       blocks.push(
-        <pre key={key++} className="my-3 overflow-x-auto rounded-md border border-rule bg-paper p-3 font-mono text-[12.5px] leading-relaxed">
+        <pre key={key++} className="my-3 overflow-x-auto rounded-md border border-hair bg-canvas p-3 font-mono text-[12.5px] leading-relaxed">
           {code.join("\n")}
         </pre>,
       );
@@ -57,7 +57,7 @@ export function Prose({ text }: { text: string }) {
     const heading = line.match(/^(#{1,6})\s+(.*)$/);
     if (heading) {
       blocks.push(
-        <h4 key={key++} className="mb-1 mt-5 font-serif text-[1.05rem] font-semibold">
+        <h4 key={key++} className="mb-1 mt-5 text-[1rem] font-bold">
           {inline(heading[2])}
         </h4>,
       );

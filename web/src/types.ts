@@ -73,3 +73,23 @@ export type ChangeSummary = {
   latest_run: string;
   reviewers: string[];
 };
+
+export type PullStatus = "untested" | "needs_you" | "clear" | "signed";
+
+export type Pull = {
+  number: number;
+  change_id: string;
+  requirement_id: string;
+  title: string;
+  author: string;
+  files: number;
+  url: string;
+  status: PullStatus;
+  lines_to_read: number;
+  reviewers: string[];
+  caught?: number;
+  planted_defects?: number;
+  signed: SignOff | null;
+};
+
+export type PullList = { repository: string; repository_url: string; base_branch: string; pull_requests: Pull[] };

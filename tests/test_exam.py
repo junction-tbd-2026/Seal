@@ -6,6 +6,7 @@ from pathlib import Path
 from reviewer_controls.exam import (
     build_exam,
     list_changes,
+    list_pulls,
     record_signoff,
     requirement_title,
     signoffs_for,
@@ -111,6 +112,25 @@ class ExamTests(unittest.TestCase):
         self.assertEqual(len(listed), 1)
         self.assertEqual((listed[0]["id"], listed[0]["title"], sorted(listed[0]["reviewers"])),
                          ("ju26-issue-1", "Clamp must hold", ["big", "small"]))
+
+    def test_pull_requests_show_where_sign_off_stands(self):
+        pulls_file = self.results / "pulls.json"
+        pulls_file.write_text(json.dumps({
+            "repository": "me/repo", "repository_url": "https://example.invalid/me/repo",
+            "pull_requests": [
+                {"number": 1, "change_id": "ju26-issue-1", "requirement_id": "1", "title": "t1"},
+                {"number": 2, "change_id": "never-run", "requirement_id": "2", "title": "t2"},
+            ],
+        }))
+        self.save("a.json", run("big", "2026-11-14T03:00:00Z", self.plants, {"p01"}))
+        listed = list_pulls(pulls_file, self.results)["pull_requests"]
+        self.assertEqual([(p["number"], p["status"], p["lines_to_read"]) for p in listed],
+                         [(1, "needs_you", 2), (2, "untested", 0)])
+        self.assertEqual(listed[0]["url"], "https://example.invalid/me/repo/pull/1")
+        record_signoff(self.results, "ju26-issue-1", "big", "Ada", "accept")
+        again = list_pulls(pulls_file, self.results)["pull_requests"][0]
+        self.assertEqual((again["status"], again["signed"]["name"]), ("signed", "Ada"))
+        self.assertEqual(list_pulls(self.results / "missing.json", self.results)["pull_requests"], [])
 
     def test_signoffs_are_appended_and_validated(self):
         with self.assertRaises(ValueError):

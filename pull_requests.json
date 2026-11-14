@@ -1,0 +1,39 @@
+{
+  "repository": "timozo/junction26-messagepack-csharp",
+  "repository_url": "https://github.com/timozo/junction26-messagepack-csharp",
+  "base_branch": "dependabot/nuget/develop/PolySharp-1.15.0",
+  "pull_requests": [
+    {
+      "number": 1,
+      "change_id": "ju26-issue-2283",
+      "requirement_id": "2283",
+      "title": "Crash on a closed generic struct from a referenced assembly",
+      "author": "AI agent",
+      "files": 4
+    },
+    {
+      "number": 2,
+      "change_id": "ju26-issue-2234",
+      "requirement_id": "2234",
+      "title": "Analyzer does not run when SuppressSourceGeneration is true",
+      "author": "AI agent",
+      "files": 4
+    },
+    {
+      "number": 3,
+      "change_id": "ju26-issue-2129",
+      "requirement_id": "2129",
+      "title": "Generate a formatter for a type in a referenced assembly",
+      "author": "AI agent",
+      "files": 28
+    },
+    {
+      "number": 4,
+      "change_id": "ju26-issue-2297",
+      "requirement_id": "2297",
+      "title": "Add ExcludeFromCodeCoverage to generated code",
+      "author": "AI agent",
+      "files": 237
+    }
+  ]
+}

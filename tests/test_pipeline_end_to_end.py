@@ -267,6 +267,14 @@ class SmallPieceTests(unittest.TestCase):
         with self.assertRaises(ModelError):
             extract_json("no json here")
 
+    def test_extract_json_skips_fragments_that_are_not_the_answer(self):
+        reply = 'The code indexes `refs[0]` and `{}` directly.\n{"meets_requirement": false, "findings": []}'
+        self.assertEqual(extract_json(reply), [0])   # without guidance, the first fragment wins
+        answer = extract_json(reply, accept=lambda value: isinstance(value, dict) and "findings" in value)
+        self.assertEqual(answer, {"meets_requirement": False, "findings": []})
+        with self.assertRaises(ModelError):
+            extract_json("only refs[0] here", accept=lambda value: isinstance(value, dict))
+
     def test_locate_trusts_the_quoted_text_over_the_numbers(self):
         lines = ["a", "  b", "c"]
         self.assertEqual(locate(lines, 2, 2, "b"), (2, 2))

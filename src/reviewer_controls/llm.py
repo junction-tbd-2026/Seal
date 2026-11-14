@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 _RECORD_LOCK = threading.Lock()
 
@@ -127,17 +127,23 @@ class ChatClient:
         raise ModelError("{} (after {} attempts)".format(last_error, self.max_retries + 1))
 
 
-def extract_json(text: str) -> Any:
-    """Parse the first JSON object or array in a model reply, ignoring prose and code fences."""
+def extract_json(text: str, accept: Optional[Callable[[Any], bool]] = None) -> Any:
+    """Parse the JSON answer out of a model reply, ignoring prose and code fences.
+
+    A reply often contains smaller JSON-looking fragments before the answer, such as
+    the `[0]` in `items[0]`. `accept` says what the answer looks like; the first value
+    that passes is returned. Without it, the first JSON object or array is returned.
+    """
     decoder = json.JSONDecoder()
     for index, character in enumerate(text):
         if character in "{[":
             try:
                 value, _ = decoder.raw_decode(text[index:])
-                return value
             except ValueError:
                 continue
-    raise ModelError("the model reply contained no JSON")
+            if accept is None or accept(value):
+                return value
+    raise ModelError("the model reply contained no usable JSON answer")
 
 
 def as_int(value: Any, default: Optional[int] = None) -> Optional[int]:

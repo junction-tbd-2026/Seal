@@ -1,73 +1,85 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Board } from "./Board";
-import { Card } from "./Card";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { DiffView } from "./DiffView";
-import { fetchChanges, fetchExam, fileName, prettyModel } from "./lib";
+import { Evidence } from "./Evidence";
+import { fetchExam, fetchPulls, fileName, prettyModel } from "./lib";
 import { Prose } from "./Prose";
-import type { ChangeSummary, Exam, Plant, SignOff } from "./types";
+import type { Exam, Plant, Pull, PullList, PullStatus, SignOff } from "./types";
 
 const PRODUCT_NAME = "Reviewer Controls";
 
-function Step({ number, title, lead, children, id }: { number: string; title: string; lead?: string; children: React.ReactNode; id: string }) {
-  return (
-    <section id={id} className="scroll-mt-20 border-t border-rule py-14">
-      <div className="mb-6">
-        <p className="font-mono text-[0.8rem] text-faint">{number}</p>
-        <h2 className="mt-1 font-serif text-[2rem] leading-tight">{title}</h2>
-        {lead && <p className="mt-2 max-w-2xl text-soft">{lead}</p>}
-      </div>
-      {children}
-    </section>
-  );
-}
+const STATUS: Record<PullStatus, { label: (pull: Pull) => string; chip: string; dot: string }> = {
+  needs_you: {
+    label: (pull) => `${pull.lines_to_read} ${pull.lines_to_read === 1 ? "place" : "places"} to read`,
+    chip: "bg-missed text-white",
+    dot: "bg-missed",
+  },
+  clear: { label: () => "Ready to sign", chip: "bg-caught text-white", dot: "bg-caught" },
+  signed: { label: (pull) => `Signed by ${pull.signed?.name ?? "someone"}`, chip: "bg-ink text-white", dot: "bg-ink" },
+  untested: { label: () => "Not tested yet", chip: "bg-panel text-soft", dot: "bg-hair" },
+};
 
-function Tabs<T extends string>({ items, value, onChange, label }: { items: { value: T; label: string; hint?: string }[]; value: T; onChange: (value: T) => void; label: string }) {
+function PullItem({ pull, active, onSelect }: { pull: Pull; active: boolean; onSelect: () => void }) {
+  const status = STATUS[pull.status];
   return (
-    <div role="tablist" aria-label={label} className="flex flex-wrap gap-1">
-      {items.map((item) => (
-        <button
-          key={item.value}
-          role="tab"
-          type="button"
-          aria-selected={item.value === value}
-          onClick={() => onChange(item.value)}
-          title={item.hint}
-          className={`rounded px-3 py-1.5 text-[0.88rem] transition-colors ${
-            item.value === value ? "bg-ink text-sheet" : "text-soft hover:bg-rule/60 hover:text-ink"
-          }`}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={active ? "true" : undefined}
+      className={`w-full rounded-lg border-2 border-ink px-3 py-2.5 text-left transition-[transform,box-shadow] ${
+        active ? "bg-warn shadow-[var(--shadow-hard)] -translate-x-0.5 -translate-y-0.5" : "bg-panel hover:bg-canvas"
+      }`}
+    >
+      <span className="flex items-center justify-between gap-2 text-[11px] font-bold uppercase tracking-wide text-soft">
+        <span>
+          #{pull.number} · issue {pull.requirement_id}
+        </span>
+        <span>{pull.files} files</span>
+      </span>
+      <span className="mt-1 block text-[14px] font-bold leading-snug">{pull.title}</span>
+      <span className={`mt-2 inline-block rounded border-2 border-ink px-1.5 py-px text-[11px] font-bold ${status.chip}`}>
+        {status.label(pull)}
+      </span>
+    </button>
   );
 }
 
 export default function App() {
-  const [changes, setChanges] = useState<ChangeSummary[] | null>(null);
-  const [changeId, setChangeId] = useState<string | null>(null);
+  const [pulls, setPulls] = useState<PullList | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
   const [exam, setExam] = useState<Exam | null>(null);
+  const [loadingExam, setLoadingExam] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filePath, setFilePath] = useState<string | null>(null);
   const [reviewerName, setReviewerName] = useState<string | null>(null);
   const [signoffs, setSignoffs] = useState<SignOff[]>([]);
   const [focus, setFocus] = useState<{ line: number; token: number } | null>(null);
-  const [showAll, setShowAll] = useState(false);
-  const changeSection = useRef<HTMLDivElement>(null);
+  const [showRequirement, setShowRequirement] = useState(false);
+
+  const loadPulls = useCallback(
+    () =>
+      fetchPulls()
+        .then((list) => {
+          setPulls(list);
+          setSelected((current) => current ?? list.pull_requests.find((pull) => pull.status !== "untested")?.number ?? list.pull_requests[0]?.number ?? null);
+        })
+        .catch((problem: Error) => setError(problem.message)),
+    [],
+  );
 
   useEffect(() => {
-    fetchChanges()
-      .then((list) => {
-        setChanges(list);
-        if (list.length > 0) setChangeId((current) => current ?? list[0].id);
-      })
-      .catch((problem: Error) => setError(problem.message));
-  }, []);
+    void loadPulls();
+  }, [loadPulls]);
+
+  const pull = pulls?.pull_requests.find((item) => item.number === selected) ?? null;
 
   useEffect(() => {
-    if (!changeId) return;
+    if (!pull) return;
     setExam(null);
-    fetchExam(changeId)
+    setFocus(null);
+    setShowRequirement(false);
+    if (pull.status === "untested") return;
+    setLoadingExam(true);
+    fetchExam(pull.change_id)
       .then((data) => {
         setExam(data);
         setSignoffs(data.signoffs);
@@ -75,15 +87,16 @@ export default function App() {
         // Open on the file the planted edits live in: that is the one worth reading.
         const planted = data.plants[0]?.file;
         setFilePath(data.change.files.find((file) => file.path === planted)?.path ?? data.change.files[0]?.path ?? null);
-        setShowAll(false);
       })
-      .catch((problem: Error) => setError(problem.message));
-  }, [changeId]);
+      .catch((problem: Error) => setError(problem.message))
+      .finally(() => setLoadingExam(false));
+    // Reload only when a different pull request is opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pull?.change_id, pull?.status === "untested"]);
 
   const reviewer = exam?.reviewers.find((item) => item.name === reviewerName) ?? exam?.reviewers[0] ?? null;
   const file = exam?.change.files.find((item) => item.path === filePath) ?? null;
 
-  // Lines the selected reviewer missed a planted defect on, in the file being shown.
   const marks = useMemo(() => {
     if (!exam || !reviewer || !file) return [];
     return exam.plants
@@ -94,158 +107,183 @@ export default function App() {
   const jumpTo = (plant: Plant) => {
     setFilePath(plant.file);
     setFocus({ line: plant.line_start, token: Date.now() });
-    changeSection.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   if (error) {
     return (
-      <main className="mx-auto max-w-2xl px-6 py-24">
-        <h1 className="font-serif text-[2rem]">The page could not load its data</h1>
+      <main className="mx-auto max-w-xl px-6 py-24">
+        <h1 className="text-[28px] font-extrabold">The page could not load its data</h1>
         <p className="mt-3 text-soft">{error}</p>
         <p className="mt-3 text-soft">
-          Start the backend with <code className="font-mono text-[0.9em]">PYTHONPATH=src .venv/bin/uvicorn reviewer_controls.server:app --port 8000</code> and reload.
+          Start the backend, then reload:
+          <code className="mt-2 block rounded-md border-2 border-ink bg-panel p-2 font-mono text-[12px]">
+            .venv/bin/uvicorn reviewer_controls.server:app --app-dir src --port 8000
+          </code>
         </p>
       </main>
     );
   }
 
-  if (changes && changes.length === 0) {
-    return (
-      <main className="mx-auto max-w-2xl px-6 py-24">
-        <h1 className="font-serif text-[2rem]">No runs yet</h1>
-        <p className="mt-3 text-soft">Run the pipeline on a change and its results will appear here.</p>
-      </main>
+  if (!pulls) return <main className="px-6 py-24 text-center text-soft">Loading pull requests…</main>;
+
+  const waiting = pulls.pull_requests.filter((item) => item.status === "needs_you" || item.status === "clear");
+  const signed = pulls.pull_requests.filter((item) => item.status === "signed");
+  const untested = pulls.pull_requests.filter((item) => item.status === "untested");
+  const totals = exam?.change.files.reduce((sum, item) => ({ added: sum.added + item.added, removed: sum.removed + item.removed }), { added: 0, removed: 0 });
+  const requirementBody = exam ? exam.change.requirement_text.split("\n").slice(1).join("\n").replace(/^\s*Source:.*$/m, "").trim() : "";
+
+  const group = (title: string, items: Pull[]) =>
+    items.length > 0 && (
+      <div>
+        <h2 className="mb-2 flex items-center justify-between text-[11px] font-bold uppercase tracking-[0.12em] text-soft">
+          {title} <span className="rounded border-2 border-ink bg-panel px-1.5 text-ink">{items.length}</span>
+        </h2>
+        <div className="space-y-2.5">
+          {items.map((item) => (
+            <PullItem key={item.number} pull={item} active={item.number === selected} onSelect={() => setSelected(item.number)} />
+          ))}
+        </div>
+      </div>
     );
-  }
-
-  if (!exam || !changes) {
-    return <main className="mx-auto max-w-2xl px-6 py-24 text-soft">Loading the latest run…</main>;
-  }
-
-  const totals = exam.change.files.reduce((sum, item) => ({ added: sum.added + item.added, removed: sum.removed + item.removed }), { added: 0, removed: 0 });
-  const requirementBody = exam.change.requirement_text.split("\n").slice(1).join("\n").replace(/^\s*Source:.*$/m, "").trim();
-  const longRequirement = requirementBody.length > 900;
 
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-10 border-b border-rule bg-paper/90 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-2 px-6 py-3">
-          <a href="#top" className="font-serif text-[1.15rem] tracking-tight">
-            {PRODUCT_NAME}
-          </a>
-          <nav aria-label="Sections" className="flex gap-5 text-[0.88rem] text-soft">
-            <a className="hover:text-ink" href="#change">The change</a>
-            <a className="hover:text-ink" href="#test">The test</a>
-            <a className="hover:text-ink" href="#card">The card</a>
-          </nav>
-          {changes.length > 1 && (
-            <label className="flex items-center gap-2 text-[0.85rem] text-soft">
-              Change
-              <select
-                value={exam.change.id}
-                onChange={(event) => setChangeId(event.target.value)}
-                className="rounded border border-rule bg-sheet px-2 py-1 text-ink"
-              >
-                {changes.map((change) => (
-                  <option key={change.id} value={change.id}>
-                    #{change.requirement_id} {change.title.slice(0, 48)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+    <div className="grid h-full grid-cols-[19rem_minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)]">
+      <header className="col-span-2 flex items-center justify-between gap-6 border-b-2 border-ink bg-ink px-4 py-2.5 text-white">
+        <div className="flex items-center gap-3">
+          <span className="grid h-7 w-7 place-items-center rounded-md border-2 border-white bg-warn text-[15px] font-extrabold text-ink" aria-hidden="true">
+            ✓
+          </span>
+          <span className="text-[17px] font-extrabold tracking-tight">{PRODUCT_NAME}</span>
         </div>
+        <a
+          href={pulls.repository_url}
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-2 rounded-md border-2 border-white/40 px-2.5 py-1 font-mono text-[12px] hover:border-white"
+          title="The repository this tool is watching"
+        >
+          <span className="h-2 w-2 rounded-full bg-caught" /> {pulls.repository}
+        </a>
       </header>
 
-      <main id="top" className="mx-auto max-w-6xl px-6">
-        <section className="py-16">
-          <p className="max-w-3xl font-serif text-[2.6rem] leading-[1.12] tracking-tight">
-            An AI reviewer said this change looks good. We planted bugs in it to find out what that is worth.
-          </p>
-          <p className="mt-5 max-w-2xl text-[1.05rem] text-soft">
-            Every review is tested on copies of the same change with known defects. The person who signs gets the
-            reviewer’s findings, what it missed, and the lines to read personally.
-          </p>
-        </section>
+      <nav aria-label="Pull requests" className="thin-scroll space-y-6 overflow-y-auto border-r-2 border-ink bg-canvas p-4">
+        <p className="text-[12.5px] leading-snug text-soft">
+          Pull requests opened by an AI agent. Each one is reviewed by an AI, and that reviewer is tested before you sign.
+        </p>
+        {group("Waiting for you", waiting)}
+        {group("Signed", signed)}
+        {group("Not tested yet", untested)}
+      </nav>
 
-        <div ref={changeSection}>
-          <Step id="change" number="01" title="The change" lead="An AI agent wrote this change to meet one requirement. This is what a human is asked to approve.">
-            <div className="grid gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-              <div>
-                <p className="text-[0.8rem] uppercase tracking-wider text-faint">Requirement #{exam.change.requirement_id}</p>
-                <h3 className="mt-1 font-serif text-[1.4rem] leading-snug">{exam.change.requirement_title}</h3>
-                <div className={`relative mt-2 ${longRequirement && !showAll ? "max-h-[22rem] overflow-hidden" : ""}`}>
-                  <Prose text={requirementBody} />
-                  {longRequirement && !showAll && (
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-paper to-transparent" />
+      <main className="min-h-0 min-w-0">
+        {!pull ? (
+          <p className="p-10 text-soft">No pull requests to show.</p>
+        ) : pull.status === "untested" ? (
+          <div className="mx-auto max-w-xl p-10">
+            <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-soft">Pull request #{pull.number}</p>
+            <h1 className="mt-1 text-[28px] font-extrabold leading-tight">{pull.title}</h1>
+            <div className="mt-6 rounded-lg border-2 border-ink bg-panel p-5 shadow-[var(--shadow-hard)]">
+              <p className="text-[17px] font-bold">This pull request has not been tested yet</p>
+              <p className="mt-2 text-soft">
+                Testing plants known defects in copies of the change and checks which ones the AI reviewer catches. Run it from the project folder:
+              </p>
+              <code className="mt-3 block overflow-x-auto rounded-md border-2 border-ink bg-canvas p-2.5 font-mono text-[12px]">
+                .venv/bin/python -m reviewer_controls.pipeline --change {pull.change_id} --kinds bug omission harmless
+              </code>
+              <button type="button" onClick={() => void loadPulls()} className="press mt-4 rounded-md bg-warn px-3 py-1.5 text-[13px] font-bold">
+                Check again
+              </button>
+            </div>
+          </div>
+        ) : !exam || !reviewer || loadingExam ? (
+          <p className="p-10 text-soft">Loading the review…</p>
+        ) : (
+          <div className="grid h-full grid-cols-[minmax(0,1fr)_23rem]">
+            <section className="flex min-h-0 min-w-0 flex-col">
+              <div className="border-b-2 border-ink bg-panel px-5 py-3.5">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-bold uppercase tracking-[0.1em] text-soft">
+                  <a href={pull.url} target="_blank" rel="noreferrer" className="underline decoration-2 underline-offset-2 hover:text-ink">
+                    Pull request #{pull.number}
+                  </a>
+                  <span>issue {pull.requirement_id}</span>
+                  <span>written by an AI agent</span>
+                  {totals && (
+                    <span>
+                      {exam.change.files.length} files · <span className="text-caught">+{totals.added}</span> <span className="text-missed">−{totals.removed}</span>
+                    </span>
                   )}
                 </div>
-                {longRequirement && (
-                  <button type="button" onClick={() => setShowAll(!showAll)} className="mt-2 text-[0.9rem] text-accent underline-offset-4 hover:underline">
-                    {showAll ? "Show less" : "Read the whole requirement"}
-                  </button>
+                <h1 className="mt-1 text-[22px] font-extrabold leading-tight tracking-tight">{exam.change.requirement_title}</h1>
+                <button
+                  type="button"
+                  onClick={() => setShowRequirement(!showRequirement)}
+                  aria-expanded={showRequirement}
+                  className="mt-1.5 text-[13px] font-bold text-brand underline decoration-2 underline-offset-2"
+                >
+                  {showRequirement ? "Hide the requirement" : "Read the requirement"}
+                </button>
+                {showRequirement && (
+                  <div className="thin-scroll mt-2 max-h-64 overflow-y-auto rounded-md border-2 border-ink bg-canvas px-4 py-2">
+                    <Prose text={requirementBody} />
+                  </div>
                 )}
               </div>
 
-              <div className="min-w-0">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <Tabs
-                    label="Files in this change"
-                    value={file?.path ?? ""}
-                    onChange={(path) => {
-                      setFilePath(path);
-                      setFocus(null);
-                    }}
-                    items={exam.change.files.map((item) => ({ value: item.path, label: fileName(item.path), hint: item.path }))}
-                  />
-                  <p className="text-[0.82rem] text-faint">
-                    {exam.change.files.length} files · <span className="text-caught">+{totals.added}</span>{" "}
-                    <span className="text-missed">−{totals.removed}</span>
-                  </p>
-                </div>
-                {file && <DiffView file={file} marks={marks} focus={focus?.line ?? null} key={`${file.path}-${focus?.token ?? 0}`} />}
-                {marks.length > 0 && reviewer && (
-                  <p className="mt-2 text-[0.85rem] text-soft">
-                    <span className="mr-1 inline-block h-3 w-[3px] translate-y-[2px] bg-missed" /> Lines where{" "}
-                    {prettyModel(reviewer.name)} missed a planted defect.
-                  </p>
-                )}
+              <div className="thin-scroll flex gap-1.5 overflow-x-auto border-b-2 border-ink bg-canvas px-3 py-2" role="tablist" aria-label="Files in this change">
+                {exam.change.files.map((item) => {
+                  const toRead = exam.plants.filter((plant) => plant.file === item.path && reviewer.read_yourself.includes(plant.id)).length;
+                  const active = item.path === file?.path;
+                  return (
+                    <button
+                      key={item.path}
+                      role="tab"
+                      type="button"
+                      aria-selected={active}
+                      title={item.path}
+                      onClick={() => {
+                        setFilePath(item.path);
+                        setFocus(null);
+                      }}
+                      className={`flex shrink-0 items-center gap-1.5 rounded-md border-2 border-ink px-2.5 py-1 font-mono text-[12px] font-bold ${
+                        active ? "bg-ink text-white" : "bg-panel hover:bg-brand-wash"
+                      }`}
+                    >
+                      {fileName(item.path)}
+                      {toRead > 0 && <span className="rounded-sm bg-missed px-1 font-sans text-[10.5px] text-white">{toRead}</span>}
+                    </button>
+                  );
+                })}
               </div>
-            </div>
-          </Step>
-        </div>
 
-        <Step id="test" number="02" title="The test" lead="Before trusting the review, test the reviewer on this exact change.">
-          <Board exam={exam} key={exam.change.id + exam.created_at} />
-        </Step>
+              {file && <DiffView file={file} marks={marks} focus={focus?.line ?? null} key={`${file.path}-${focus?.token ?? 0}`} className="min-h-0 flex-1" />}
 
-        <Step id="card" number="03" title="The card" lead="What a named person signs, in place of reading every line.">
-          <div className="mb-6 flex justify-center">
-            <Tabs
-              label="Reviewer"
-              value={reviewer?.name ?? ""}
-              onChange={setReviewerName}
-              items={exam.reviewers.map((item) => ({ value: item.name, label: prettyModel(item.name), hint: item.name }))}
-            />
-          </div>
-          {reviewer && (
-            <Card
+              <p className="border-t-2 border-ink bg-panel px-5 py-2 text-[12.5px] text-soft">
+                {marks.length > 0 ? (
+                  <>
+                    <span className="mr-1.5 inline-block h-3 w-1.5 translate-y-0.5 bg-missed" />
+                    Marked lines are where {prettyModel(reviewer.name)} failed to notice a defect we planted. Its “no problems” means little there.
+                  </>
+                ) : (
+                  <>Nothing is marked in this file for {prettyModel(reviewer.name)}.</>
+                )}
+              </p>
+            </section>
+
+            <Evidence
+              key={`${exam.change.id}-${reviewer.name}`}
               exam={exam}
               reviewer={reviewer}
+              onReviewer={setReviewerName}
               signoffs={signoffs}
-              onSigned={(entry) => setSignoffs((current) => [...current, entry])}
+              onSigned={(entry) => {
+                setSignoffs((current) => [...current, entry]);
+                void loadPulls();
+              }}
               onJump={jumpTo}
             />
-          )}
-        </Step>
+          </div>
+        )}
       </main>
-
-      <footer className="mt-10 border-t border-rule">
-        <div className="mx-auto max-w-6xl px-6 py-8 text-[0.85rem] text-faint">
-          Built at Junction 2026 for Tieto’s challenge, Earned Trust in AI Code. Planted defects were written by{" "}
-          {prettyModel(exam.planter)}.
-        </div>
-      </footer>
     </div>
   );
 }

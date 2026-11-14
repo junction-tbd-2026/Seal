@@ -210,7 +210,9 @@ class ModelPlanter(Planter):
         )
         try:
             reply = extract_json(
-                self.client.complete(PLANT_SYSTEM, user, temperature=0.7, max_tokens=self.max_tokens).text
+                self.client.complete(PLANT_SYSTEM, user, temperature=0.7, max_tokens=self.max_tokens).text,
+                accept=lambda value: (isinstance(value, dict) and isinstance(value.get("edits"), list))
+                or (isinstance(value, list) and bool(value) and all(isinstance(item, dict) for item in value)),
             )
         except ModelError as error:
             self.problems.append("The planter failed on {}: {}".format(file_diff.path, error))

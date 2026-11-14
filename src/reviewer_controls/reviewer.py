@@ -123,7 +123,10 @@ class ModelReviewer(Reviewer):
             result.prompt_tokens = response.prompt_tokens
             result.completion_tokens = response.completion_tokens
             result.seconds = response.seconds
-            reply = extract_json(response.text)
+            reply = extract_json(
+                response.text,
+                accept=lambda value: isinstance(value, dict) and ("findings" in value or "meets_requirement" in value),
+            )
         except ModelError as error:
             result.error = str(error)
             return result

@@ -213,6 +213,39 @@ def build_exam(results_dir: Path, change_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def list_pulls(pulls_file: Path, results_dir: Path) -> Dict[str, Any]:
+    """The connected repository's pull requests, each with where its sign-off stands."""
+    data = json.loads(pulls_file.read_text()) if pulls_file.is_file() else {"pull_requests": []}
+    pulls = []
+    for pull in data.get("pull_requests", []):
+        exam = build_exam(results_dir, pull["change_id"])
+        entry = dict(pull)
+        entry["url"] = "{}/pull/{}".format(data.get("repository_url", "").rstrip("/"), pull["number"])
+        if exam is None or not exam["reviewers"]:
+            entry.update({"status": "untested", "lines_to_read": 0, "reviewers": [], "signed": None})
+        else:
+            primary = exam["reviewers"][0]
+            signed = exam["signoffs"][-1] if exam["signoffs"] else None
+            to_read = len(primary["read_yourself"])
+            entry.update(
+                {
+                    "status": "signed" if signed else "needs_you" if to_read else "clear",
+                    "lines_to_read": to_read,
+                    "reviewers": [r["name"] for r in exam["reviewers"]],
+                    "caught": primary["counts"]["defects_caught"],
+                    "planted_defects": primary["counts"]["defects_total"],
+                    "signed": signed,
+                }
+            )
+        pulls.append(entry)
+    return {
+        "repository": data.get("repository", ""),
+        "repository_url": data.get("repository_url", ""),
+        "base_branch": data.get("base_branch", ""),
+        "pull_requests": pulls,
+    }
+
+
 def record_signoff(results_dir: Path, change_id: str, reviewer: str, name: str, decision: str) -> Dict[str, Any]:
     """Append a named human's decision. A sign-off is never edited, only added to."""
     name = name.strip()

@@ -1,4 +1,4 @@
-import type { ChangeSummary, Exam, PlantKind, Result, SignOff } from "./types";
+import type { ChangeSummary, Exam, PlantKind, PullList, Result, SignOff } from "./types";
 
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -7,6 +7,8 @@ async function getJson<T>(url: string): Promise<T> {
 }
 
 export const fetchChanges = () => getJson<ChangeSummary[]>("/api/changes");
+
+export const fetchPulls = () => getJson<PullList>("/api/pulls");
 
 export const fetchExam = (changeId: string) => getJson<Exam>(`/api/exam/${encodeURIComponent(changeId)}`);
 
