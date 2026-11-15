@@ -1,31 +1,42 @@
 @import "tailwindcss";
-@import "@fontsource-variable/bricolage-grotesque";
 @import "@fontsource-variable/jetbrains-mono";
 
-/* Bold and graphic: thick ink outlines, flat blocks of colour, hard shadows. */
+/*
+ * Calm and quiet: warm greys, thin hairlines, soft shadows. Colour carries meaning only:
+ * purple is the AI reviewer, red a blind spot, green what held up in our test, amber a reported problem.
+ */
 @theme {
-  --color-ink: #121212;
-  --color-soft: #4a4a48;
-  --color-faint: #7b7b78;
-  --color-canvas: #e7e9ec;
+  --color-ink: #37352f;
+  --color-soft: #787774;
+  --color-faint: #a5a4a0;
+  --color-canvas: #f4f4f2;
+  --color-subtle: #efefed;
   --color-panel: #ffffff;
-  --color-line: #121212;
-  --color-hair: #c9cdd3;
+  --color-hair: rgb(0 0 0 / 0.08);
+  --color-line: rgb(0 0 0 / 0.14);
 
-  --color-brand: #2b50ff;
-  --color-brand-wash: #dfe6ff;
-  --color-caught: #10a561;
-  --color-caught-wash: #d6f5e4;
-  --color-missed: #ff4a2e;
-  --color-missed-wash: #ffe1da;
-  --color-warn: #ffc31f;
-  --color-warn-wash: #fff2c6;
+  --color-ai: #6e56cf;
+  --color-ai-wash: #f3f0fd;
+  --color-ai-tint: #e4ddf9;
+  --color-link: #2383e2;
+  --color-done: #51aa38;
+  --color-caught: #3f7d58;
+  --color-caught-wash: #eaf3ec;
+  --color-caught-soft: #f0f8f2;
+  --color-missed: #d44c47;
+  --color-missed-wash: #fbedec;
+  --color-warn: #b7791f;
+  /* A harmless edit the AI reviewer reported anyway: bright, so it reads as a colour of its own. */
+  --color-alarm: #fbbf24;
+  --color-warn-wash: #fbf3db;
 
-  --font-sans: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono Variable", ui-monospace, Menlo, monospace;
+  --font-sans: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
 
-  --shadow-hard: 4px 4px 0 var(--color-ink);
-  --shadow-hard-sm: 2px 2px 0 var(--color-ink);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.03), 0 8px 32px rgb(0 0 0 / 0.04);
+  --shadow-float: 0 1px 3px rgb(0 0 0 / 0.05), 0 8px 32px rgb(0 0 0 / 0.08);
+  --shadow-pop: 0 4px 12px rgb(0 0 0 / 0.08), 0 16px 48px rgb(0 0 0 / 0.12);
 }
 
 html,
@@ -39,46 +50,93 @@ body {
   background: var(--color-canvas);
   color: var(--color-ink);
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11", "ss01";
 }
 
 ::selection {
-  background: var(--color-warn);
+  background: var(--color-ai-tint);
 }
 
 :focus-visible {
-  outline: 3px solid var(--color-brand);
+  outline: 2px solid var(--color-link);
   outline-offset: 2px;
 }
 
-/* A pressable block: thick outline and a hard shadow that collapses when pressed. */
-.press {
-  border: 2px solid var(--color-ink);
-  box-shadow: var(--shadow-hard-sm);
-  transition: transform 80ms ease-out, box-shadow 80ms ease-out, background-color 120ms;
+/* A quiet button: white, a hairline, a little lift on hover. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-line);
+  background: var(--color-panel);
+  color: var(--color-ink);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 120ms, border-color 120ms, color 120ms, box-shadow 120ms, transform 80ms;
 }
-.press:hover:not(:disabled) {
-  transform: translate(-1px, -1px);
-  box-shadow: 3px 3px 0 var(--color-ink);
+.btn:hover:not(:disabled) {
+  background: #fafaf9;
+  box-shadow: var(--shadow-card);
 }
-.press:active:not(:disabled) {
-  transform: translate(2px, 2px);
-  box-shadow: 0 0 0 var(--color-ink);
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
-.press:disabled {
+.btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
+/* The one action that moves the audit on. */
+.btn-dark {
+  border-color: var(--color-ink);
+  background: var(--color-ink);
+  color: #fff;
+}
+.btn-dark:hover:not(:disabled) {
+  background: #2a2925;
+}
+
+/* A keyboard key hint inside a button. */
+.kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid var(--color-hair);
+  background: var(--color-canvas);
+  color: var(--color-soft);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+}
+.btn-dark .kbd {
+  border-color: rgb(255 255 255 / 0.85);
+  background: transparent;
+  color: #fff;
+}
+
 .thin-scroll {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-faint) transparent;
+  scrollbar-color: rgb(0 0 0 / 0.18) transparent;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .press {
+  .btn {
     transition: none;
   }
 }

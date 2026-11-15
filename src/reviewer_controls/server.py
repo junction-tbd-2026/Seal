@@ -24,7 +24,7 @@ RESULTS_DIR = Path(os.environ.get("RESULTS_DIR") or ROOT / "results")
 PULLS_FILE = Path(os.environ.get("PULLS_FILE") or ROOT / "pull_requests.json")
 WEB_DIST = ROOT / "web" / "dist"
 
-app = FastAPI(title="Reviewer Controls", docs_url="/api/docs", openapi_url="/api/openapi.json")
+app = FastAPI(title="Seal", docs_url="/api/docs", openapi_url="/api/openapi.json")
 # SPOT_CHECK_RATE is the share of pull requests whose first sign-off is a spot-check. Set it to 1 for a demo.
 vigilance = Vigilance(
     RESULTS_DIR,

@@ -84,16 +84,46 @@ export function lineRange(start: number, end: number): string {
   return end > start ? `${start}–${end}` : `${start}`;
 }
 
-/** The centred column every part of a review shares, so the page has even white space on both sides. */
-export const COLUMN = "mx-auto w-full max-w-[64rem] px-8";
-
 /**
- * The name of a review objective as the page shows it: "RO2" for the pipeline's "R2".
+ * The name of a review objective as the page shows it: "O2" for the pipeline's "R2".
  * "R" alone reads as "requirement", and the requirement is the whole issue, not one objective.
  */
 export function objectiveName(id: string): string {
   const number = /^R(\d+)$/i.exec(id.trim());
-  return number ? `RO${number[1]}` : id;
+  return number ? `O${number[1]}` : id;
+}
+
+/** The family name of a model, for running text: "Nemotron 3.5 Super VL" -> "Nemotron". */
+export function shortModel(name: string): string {
+  return prettyModel(name).split(" ")[0] ?? name;
+}
+
+export function plural(count: number, one: string, many = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+const DECLARATION = [
+  // C#, Java, TypeScript members: modifiers, a type, then the name and its parameters.
+  /^\s*(?:\[[^\]]*\]\s*)*(?:(?:public|private|protected|internal|static|async|override|virtual|sealed|abstract|readonly|partial|unsafe|extern|new|export|default)\s+)+[\w<>[\],.?\s]*?\b(\w+)\s*(?:<[^>]*>)?\s*\(/,
+  /\b(?:class|struct|interface|record|enum|trait|impl)\s+(\w+)/,
+  /^\s*(?:async\s+)?def\s+(\w+)\s*\(/,
+  /\bfunction\s+(\w+)\s*\(/,
+  /^func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(/,
+  /\bfn\s+(\w+)\s*[<(]/,
+];
+
+/** The method, type or heading a run of lines sits in, when one of the lines declares it: "TypeCollector(…)". */
+export function symbolOf(lines: string[]): string | null {
+  for (const line of lines) {
+    const heading = /^#{1,6}\s+(.+)$/.exec(line.trim());
+    if (heading) return heading[1];
+    for (const pattern of DECLARATION) {
+      const match = pattern.exec(line);
+      if (!match) continue;
+      return /\b(?:class|struct|interface|record|enum|trait|impl)\s/.test(line) && !line.includes("(") ? line.trim().replace(/\s*[{:].*$/, "") : `${match[1]}(…)`;
+    }
+  }
+  return null;
 }
 
 export function fileName(path: string): string {

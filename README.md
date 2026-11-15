@@ -1,4 +1,4 @@
-# Reviewer Controls (working title)
+# Seal
 
 Junction 2026 · Tieto challenge **"Earned Trust in AI Code"**
 
@@ -60,27 +60,41 @@ A working prototype with two parts.
 
 **2. A web page where the accountable person signs.**
 
-- A list of pull requests. Each one opens as an audit of its AI review, in
-  steps: first how the AI reviewer did on our test, then one step per
-  review objective, then the sign-off. (A review objective is one of the
-  checkable points the requirement, the issue, was split into.)
-- Each objective step states three things: what the AI reviewer claims,
-  how that claim did on our test, and what the person must do. Below it is
-  the code the AI reviewer cites as evidence, every reference already open.
-  One click shows the same lines in the full change.
+- A landing page shows the pull requests. One that is ready opens as an
+  audit of its AI review, in steps: first how the AI reviewer did on our
+  test, then one step per review objective, then the sign-off. (A review
+  objective is one of the checkable points the requirement, the issue, was
+  split into.) A menu at the top switches between pull requests during an
+  audit.
+- The landing page is a board with one column per step: "Pending" (a
+  first AI check, or a rejected change back with the AI agent to be fixed
+  and checked again), "Ready for your audit", "Full review required"
+  (sent for a full human read, with a link to read it on GitHub) and
+  "Accepted" (with who signed and when, newest first, older ones folded
+  away). Only the cards ready for an audit open.
+- After the sign-off the page goes back to the board and the signed pull
+  request moves to its column. A signed pull request cannot be opened again.
+- Each objective step states three things in the side bar: what the AI
+  reviewer claims, how that claim did on our test, and what the person must
+  do. The panel shows the change file by file: the lines the AI reviewer
+  cites as evidence and the blind spots open as cards, every other changed
+  line folded to one row. One click shows the same lines in the full change.
 - The person rules on one explicit question per objective: does the cited
   code prove that the change meets the objective? Where the AI reviewer
   missed a planted mistake, the person first judges the real code at that
-  line ("is correct" or "is wrong").
-- The page shows one task at a time. Finishing a step opens the next one,
-  and background detail stays folded until asked for. A progress indicator
-  above the question shows every step and opens any of them, next to a
-  switch between the review and the full change. The list of pull requests
-  is a narrow rail that opens on hover.
+  line ("looks right" or "looks wrong").
+- The page shows one task at a time. The question of the step floats at
+  the bottom (the Y and N keys answer it), and finishing a step opens the
+  next one. Background detail stays folded until asked for. A step bar at
+  the top shows every step and opens any of them. The pull requests are
+  listed in the side bar and in a menu at the top.
 - The checks are saved in the browser, so an audit can be paused and
   continued later. They are thrown away if the code shown changes.
-- A sign-off with the person's name. Accept unlocks only when every step is
-  done and nothing is marked wrong. Reject and full read are always open.
+- A sign-off with the person's name. Accept unlocks only when every
+  objective, blind spot and reported problem is judged and nothing is marked
+  wrong. The first step, the test of the AI reviewer, is a briefing, not a
+  check: it counts as seen once the person moves on from it. Reject and full
+  read are always open.
 - A spot-check of the person: for a share of pull requests the code first
   shown is a copy with a planted bug. Accepting it is recorded and nothing
   is approved.
@@ -107,8 +121,8 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
   In `results/` now: pull requests #1 and #2 with both reviewers, and pull
   request #3 with Nemotron only. In these saved runs the second reviewer is
   still Gemma; reruns use Gemini and replace them. Missing: pull request #3
-  with the second reviewer, and pull request #4, which shows as "Not tested
-  yet" on the page.
+  with the second reviewer, and pull request #4, which shows as "AI check
+  running" on the page.
 - To finish them (needs keys, see below), run the pipeline for
   `ju26-issue-2129` and `ju26-issue-2297`, then regenerate the summary with
   `scripts/summarise_results.py` and commit `results/` and `docs/results.md`.
@@ -120,8 +134,8 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
   reused: the whole run took about 2 minutes (it took about 5.5 before the
   one-round change), Nemotron's part about 75 seconds. Planting new copies
   adds the planter's time on top.
-- Not started: running the planted copies (Modal), the product name, the
-  video, the public repository.
+- Not started: running the planted copies (Modal), the video, the public
+  repository.
 
 ## Next steps
 
@@ -131,8 +145,11 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
 2. **Finish the reruns** on all four sample changes with the current version
    and regenerate the results summary.
 3. **Start a check from the pull request.** Today a check is started from
-   the command line. It should start when a pull request opens and post its
-   status back to it.
+   the command line. It should start on a server when a pull request opens
+   and post its status back to it. Until then the page cannot tell a check
+   that is running from one that never started: every pull request without
+   results shows as "AI check running", and the list asks again every few
+   seconds so it opens once results arrive.
 4. **Keep a track record.** Pool results per reviewer, per code area and per
    kind of defect, so the amount of human review follows measured trust.
 5. **Submission.** Product name, two-minute video, public repository, and

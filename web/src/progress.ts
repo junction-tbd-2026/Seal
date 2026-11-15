@@ -179,8 +179,8 @@ function describePoint(point: PointView, spots: Plant[]): Pick<PointStep, "tone"
         verdict: "Failed",
         detail:
           point.broken_total > 0
-            ? `The AI reviewer missed ${point.broken_total - point.broken_noticed} of ${breaks(point.broken_total)} in the cited lines.`
-            : `The AI reviewer missed ${breaks(spots.length)} aimed at ${objective}.`,
+            ? `Planted ${breaks(point.broken_total)} in the lines it cites. It missed ${point.broken_total - point.broken_noticed}.`
+            : `Missed ${breaks(spots.length)} aimed at ${objective}.`,
       },
     };
   }
@@ -192,10 +192,10 @@ function describePoint(point: PointView, spots: Plant[]): Pick<PointStep, "tone"
       test: {
         verdict: "Nothing to test",
         detail: point.broad_evidence
-          ? "The citations of the AI reviewer covered too many lines to count as evidence."
+          ? "Its citations covered too many lines to count as evidence."
           : point.dropped_evidence
-            ? "The AI reviewer cited lines that are not part of the change."
-            : "The AI reviewer cited no code.",
+            ? "It cited lines that are not part of the change."
+            : "It cited no code.",
       },
     };
   }
@@ -204,7 +204,7 @@ function describePoint(point: PointView, spots: Plant[]): Pick<PointStep, "tone"
       tone: "unproven",
       claim,
       claimsMet,
-      test: { verdict: "Unreliable", detail: "The AI reviewer gave two different answers in two identical reviews." },
+      test: { verdict: "Unreliable", detail: "It gave two different answers in two identical reviews." },
     };
   }
   if (point.tests_only) {
@@ -222,7 +222,7 @@ function describePoint(point: PointView, spots: Plant[]): Pick<PointStep, "tone"
       claimsMet,
       test: {
         verdict: "Passed",
-        detail: `The AI reviewer noticed ${point.broken_total === 1 ? "the 1 planted mistake" : `all ${breaks(point.broken_total)}`} in the cited lines.`,
+        detail: `Planted ${breaks(point.broken_total)} in the lines it cites. It missed none.`,
       },
     };
   }
@@ -334,7 +334,7 @@ export function stepState(step: Step, progress: Progress, signed: SignOff | null
 export function stepLabel(step: Step): { short: string; eyebrow: string; title: string } {
   switch (step.kind) {
     case "intro":
-      return { short: "Start", eyebrow: "Start of the audit", title: "You are auditing the AI reviewer" };
+      return { short: "Test", eyebrow: "Start of the audit", title: "You are auditing the AI reviewer" };
     case "point":
       return { short: objectiveName(step.point.id), eyebrow: `Review objective ${objectiveName(step.point.id)}`, title: step.point.text };
     case "spots":

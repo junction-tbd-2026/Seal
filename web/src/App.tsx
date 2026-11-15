@@ -1,83 +1,105 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, BotIcon, CheckIcon, ChevronDown, GitHubMark, PanelIcon, PullIcon, XIcon } from "./icons";
 import { fetchPulls, fetchReview, postSignOff, prettyModel } from "./lib";
-import { clearSaved, codeFingerprint, readSaved, storageKey } from "./progress";
-import { Prose } from "./Prose";
+import { clearSaved, codeFingerprint, storageKey } from "./progress";
+import { Account, Landing, PullGroups, RepoLink, canOpen, stageOf } from "./Pulls";
 import { SpotCheckReveal } from "./SpotCheck";
-import type { Exam, Pull, PullList, PullStatus, SignOff, SignResult, SpotVerdict } from "./types";
+import type { Exam, PullList, SignOff, SignResult, SpotVerdict } from "./types";
 import { Workspace } from "./Workspace";
 
-const PRODUCT_NAME = "Reviewer Controls";
-
-/** One short line on where a pull request stands, and the colour of its badge in the rail. */
-const STATUS: Record<PullStatus, { label: (pull: Pull) => string; badge: (pull: Pull) => string }> = {
-  needs_you: {
-    label: (pull) => `AI reviewer missed planted mistakes at ${pull.lines_to_read} ${pull.lines_to_read === 1 ? "line" : "lines"}`,
-    badge: () => "bg-missed text-white",
-  },
-  // Not "ready to sign": the steps come first, whatever the reviewer caught.
-  clear: {
-    label: (pull) => (pull.planted_defects ? "AI reviewer noticed every planted mistake" : "AI reviewer could not be tested"),
-    badge: (pull) => (pull.planted_defects ? "bg-caught text-white" : "bg-warn text-ink"),
-  },
-  signed: {
-    label: (pull) =>
-      `${{ accept: "Accepted", reject: "Rejected", full_read: "Sent for full read" }[pull.signed?.decision ?? ""] ?? "Signed"} by ${pull.signed?.name ?? "someone"}`,
-    badge: () => "bg-ink text-white",
-  },
-  untested: { label: () => "Not tested yet", badge: () => "border-dashed bg-canvas text-faint" },
-};
-
-/** Text in the rail that only shows once the rail is open. */
-const WHEN_OPEN = "opacity-0 transition-opacity duration-150 group-hover/rail:opacity-100 group-has-[:focus-visible]/rail:opacity-100";
-
-/** One pull request in the rail: a numbered badge that is always visible, and its title and status once the rail opens. */
-function PullItem({ pull, active, onSelect }: { pull: Pull; active: boolean; onSelect: () => void }) {
-  const status = STATUS[pull.status];
-  // A review this person started here and has not signed yet.
-  const saved = pull.status === "needs_you" || pull.status === "clear" ? readSaved(storageKey(pull.change_id, pull.reviewers[0] ?? "")) : null;
-  const started = saved != null && saved.done > 0 && saved.total > 0;
-  const detail = started ? `Your audit: ${saved.done} of ${saved.total} steps done` : status.label(pull);
+/** A button that opens a small menu under itself. Closes on a click outside, on Escape, and after a choice. */
+function Dropdown({
+  align = "left",
+  label,
+  trigger,
+  children,
+}: {
+  align?: "left" | "right";
+  label: string;
+  trigger: (open: boolean) => ReactNode;
+  children: (close: () => void) => ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const reduced = useReducedMotion() ?? false;
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => !box.current?.contains(event.target as Node) && setOpen(false);
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-current={active ? "true" : undefined}
-      aria-label={`Pull request ${pull.number}: ${pull.title}. ${detail}`}
-      className={`relative flex w-full items-center gap-3 rounded-lg p-1.5 text-left ${
-        active ? "group-hover/rail:bg-panel group-has-[:focus-visible]/rail:bg-panel" : "hover:bg-panel"
-      }`}
-    >
-      {/* The open pull request: a bar on the rail's edge, so it reads the same closed and open. */}
-      {active && <span className="absolute -left-2.5 top-2.5 h-8 w-1 rounded-r bg-ink" aria-hidden="true" />}
-      <span
-        className={`relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-md border-2 border-ink text-[13px] font-extrabold ${status.badge(pull)} ${
-          active ? "shadow-[var(--shadow-hard-sm)]" : ""
-        }`}
-      >
-        #{pull.number}
-        {started && (
-          <span className="absolute inset-x-0 bottom-0 h-1 bg-panel" aria-hidden="true">
-            <span className="block h-full bg-ink" style={{ width: `${Math.round((saved.done / saved.total) * 100)}%` }} />
-          </span>
+    <div ref={box} className="relative min-w-0">
+      <button type="button" aria-haspopup="menu" aria-expanded={open} aria-label={label} onClick={() => setOpen(!open)} className="block max-w-full">
+        {trigger(open)}
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            role="menu"
+            initial={{ opacity: 0, y: reduced ? 0 : -4, scale: reduced ? 1 : 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: reduced ? 0 : -4, scale: reduced ? 1 : 0.98 }}
+            transition={{ duration: 0.14 }}
+            className={`absolute top-full z-50 mt-1.5 w-[22rem] max-w-[calc(100vw-2rem)] rounded-xl border border-hair bg-panel p-1.5 shadow-[var(--shadow-pop)] ${
+              align === "right" ? "right-0 origin-top-right" : "left-0 origin-top-left"
+            }`}
+          >
+            {children(() => setOpen(false))}
+          </motion.div>
         )}
-      </span>
-      <span className={`min-w-0 flex-1 ${WHEN_OPEN}`}>
-        <span className="block truncate text-[13.5px] font-bold leading-snug">{pull.title}</span>
-        <span className="block truncate text-[12px] text-soft">{detail}</span>
-      </span>
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** How often the list asks again while an AI check is running. */
+const POLL_MS = 8000;
+
+/** The pull request named in the address (?pr=2), so the back button and a reload keep the place. */
+function pullInAddress(): number | null {
+  const number = Number(new URLSearchParams(window.location.search).get("pr"));
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
+/** The name and the seal, which lead back to the list. The seal wiggles when pointed at, because it can. */
+function Brand({ onHome }: { onHome: () => void }) {
+  const reduced = useReducedMotion() ?? false;
+  return (
+    <button type="button" onClick={onHome} title="All pull requests" className="flex shrink-0 items-center gap-2 rounded-lg py-0.5 pl-1 pr-1.5 hover:bg-subtle">
+      <motion.img
+        src="/seal.svg"
+        alt=""
+        width={28}
+        height={28}
+        className="h-7 w-7 drop-shadow-[0_1px_1px_rgb(0_0_0/0.06)]"
+        whileHover={reduced ? undefined : { rotate: [0, -8, 7, -4, 0], scale: 1.08 }}
+        transition={{ duration: 0.6 }}
+      />
+      <span className="hidden text-[15.5px] font-semibold tracking-[-0.01em] sm:inline">Seal</span>
     </button>
   );
 }
 
 export default function App() {
   const [pulls, setPulls] = useState<PullList | null>(null);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(pullInAddress);
+  /** The pull request signed last, so the list can show it settling at the bottom. */
+  const [justSigned, setJustSigned] = useState<number | null>(null);
   const [exam, setExam] = useState<Exam | null>(null);
   const [loadingExam, setLoadingExam] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reviewerName, setReviewerName] = useState<string | null>(null);
   const [signoffs, setSignoffs] = useState<SignOff[]>([]);
-  const [showRequirement, setShowRequirement] = useState(false);
+  const [sideOpen, setSideOpen] = useState(false);
+  const [briefSlot, setBriefSlot] = useState<HTMLDivElement | null>(null);
+  const reduced = useReducedMotion() ?? false;
   // Saved checks live in the browser, not in state: this redraws the list when they change.
   const [, setSavedTick] = useState(0);
   const onSaved = useCallback(() => setSavedTick((tick) => tick + 1), []);
@@ -86,10 +108,7 @@ export default function App() {
   const loadPulls = useCallback(
     () =>
       fetchPulls()
-        .then((list) => {
-          setPulls(list);
-          setSelected((current) => current ?? list.pull_requests.find((pull) => pull.status !== "untested")?.number ?? list.pull_requests[0]?.number ?? null);
-        })
+        .then((list) => setPulls(list))
         .catch((problem: Error) => setError(problem.message)),
     [],
   );
@@ -98,7 +117,38 @@ export default function App() {
     void loadPulls();
   }, [loadPulls]);
 
+  // While an AI check is running, ask again now and then, so the pull request opens up once its results are in.
+  const checking = pulls?.pull_requests.some((item) => stageOf(item) === "checking") ?? false;
+  useEffect(() => {
+    if (!checking) return;
+    const timer = window.setInterval(() => void loadPulls(), POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [checking, loadPulls]);
+
+  /** Opens a pull request, or the list with null. The address follows, so the back button works. */
+  const go = useCallback((number: number | null, replace = false) => {
+    setSelected(number);
+    setSideOpen(false);
+    if (number != null) {
+      setJustSigned(null);
+    }
+    const address = number == null ? window.location.pathname : `${window.location.pathname}?pr=${number}`;
+    if (replace) window.history.replaceState(null, "", address);
+    else window.history.pushState(null, "", address);
+  }, []);
+
+  useEffect(() => {
+    const onPop = () => setSelected(pullInAddress());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   const pull = pulls?.pull_requests.find((item) => item.number === selected) ?? null;
+
+  // Only a pull request ready to audit opens. A signed one, one still being checked, or an unknown number leads back to the list.
+  useEffect(() => {
+    if (pulls && selected != null && (!pull || !canOpen(pull))) go(null, true);
+  }, [pulls, selected, pull, go]);
 
   const loadReview = useCallback((changeId: string, keepView: boolean) => {
     setLoadingExam(true);
@@ -115,7 +165,6 @@ export default function App() {
   useEffect(() => {
     if (!pull) return;
     setExam(null);
-    setShowRequirement(false);
     if (pull.status !== "untested") void loadReview(pull.change_id, false);
     // Reload only when a different pull request is opened.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -124,17 +173,24 @@ export default function App() {
   const reviewer = exam?.reviewers.find((item) => item.name === reviewerName) ?? exam?.reviewers[0] ?? null;
   // Saved checks belong to the code they were made on. A spot-check copy and the real change differ here.
   const code = useMemo(() => (exam ? codeFingerprint(exam.change.files) : ""), [exam]);
+  const select = (number: number) => go(number);
 
   const sign = async (name: string, decision: string, spots: { plant_id: string; verdict: SpotVerdict }[]) => {
     if (!exam?.session || !reviewer) throw new Error("This review session has ended. Reload the pull request.");
     const result = await postSignOff({ session: exam.session, reviewer: reviewer.name, name, decision, spots });
     if (result.spot_check) {
       setReveal({ result, name: name.trim() });
-    } else {
-      setSignoffs((current) => [...current, result.signoff]);
-      await loadReview(exam.change.id, true);
+      void loadPulls();
+      return;
     }
-    void loadPulls();
+    // Signed is final: the audit's checks are done with, and the pull request closes.
+    exam.reviewers.forEach((item) => clearSaved(storageKey(exam.change.id, item.name)));
+    setSignoffs((current) => [...current, result.signoff]);
+    // Noted before the list reloads: the reload alone already leads back to the list.
+    setJustSigned(pull?.number ?? null);
+    await loadPulls();
+    setExam(null);
+    go(null, true);
   };
 
   const continueAfterReveal = () => {
@@ -148,11 +204,11 @@ export default function App() {
   if (error) {
     return (
       <main className="mx-auto max-w-xl px-6 py-24">
-        <h1 className="text-[28px] font-extrabold">The page could not load its data</h1>
+        <h1 className="text-[24px] font-semibold">The page could not load its data</h1>
         <p className="mt-3 text-soft">{error}</p>
         <p className="mt-3 text-soft">
           Start the backend, then reload:
-          <code className="mt-2 block rounded-md border-2 border-ink bg-panel p-2 font-mono text-[12px]">
+          <code className="mt-2 block rounded-lg border border-line bg-panel p-2.5 font-mono text-[12px]">
             .venv/bin/uvicorn reviewer_controls.server:app --app-dir src --port 8000
           </code>
         </p>
@@ -160,153 +216,233 @@ export default function App() {
     );
   }
 
-  if (!pulls) return <main className="px-6 py-24 text-center text-soft">Loading pull requests…</main>;
-
-  const waiting = pulls.pull_requests.filter((item) => item.status === "needs_you" || item.status === "clear");
-  const signed = pulls.pull_requests.filter((item) => item.status === "signed");
-  const untested = pulls.pull_requests.filter((item) => item.status === "untested");
-  const totals = exam?.change.files.reduce((sum, item) => ({ added: sum.added + item.added, removed: sum.removed + item.removed }), { added: 0, removed: 0 });
-  const requirementBody = exam ? exam.change.requirement_text.split("\n").slice(1).join("\n").replace(/^\s*Source:.*$/m, "").trim() : "";
-  const spot = pulls.spot_checks;
-
-  const group = (title: string, items: Pull[]) =>
-    items.length > 0 && (
-      <div className="border-t border-hair pt-2 first:border-t-0 first:pt-0">
-        <h2 className={`whitespace-nowrap px-2 pb-1 text-[11px] font-bold uppercase tracking-[0.1em] text-faint ${WHEN_OPEN}`}>
-          {title} · {items.length}
-        </h2>
-        <div className="space-y-1">
-          {items.map((item) => (
-            <PullItem key={item.number} pull={item} active={item.number === selected} onSelect={() => setSelected(item.number)} />
-          ))}
+  if (!pulls)
+    return (
+      <main className="grid h-full place-items-center px-6 text-center text-soft">
+        <div>
+          <motion.img
+            src="/seal.svg"
+            alt=""
+            className="mx-auto h-14 w-14"
+            animate={reduced ? undefined : { y: [0, -5, 0] }}
+            transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+          />
+          <p className="mt-3">Loading pull requests…</p>
         </div>
+      </main>
+    );
+
+
+  // Home: the list of pull requests in the middle of the screen.
+  if (!pull) {
+    return (
+      <div className="flex h-full flex-col">
+        <header className="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-hair bg-panel px-3 sm:px-4">
+          <Brand onHome={() => go(null)} />
+          <div className="flex min-w-0 items-center gap-4">
+            <RepoLink pulls={pulls} />
+            <span className="h-5 w-px shrink-0 bg-line" aria-hidden="true" />
+            <Account pulls={pulls} />
+          </div>
+        </header>
+        <main className="min-h-0 flex-1">
+          <Landing pulls={pulls} justSigned={justSigned} onOpen={(number) => go(number)} />
+        </main>
+        {reveal && <SpotCheckReveal result={reveal.result} name={reveal.name} onContinue={continueAfterReveal} />}
       </div>
     );
+  }
+
+  const panel = !exam || !reviewer ? (
+    <p className="p-10 text-soft">{loadingExam ? "Loading the review…" : "No review to show."}</p>
+  ) : (
+    <Workspace
+      key={`${exam.change.id}|${reviewer.run_file}|${code}`}
+      exam={exam}
+      reviewer={reviewer}
+      code={code}
+      signoffs={signoffs}
+      briefSlot={briefSlot}
+      onSign={sign}
+      onSaved={onSaved}
+    />
+  );
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex shrink-0 items-center justify-between gap-6 bg-ink px-4 py-2 text-white">
-        <div className="flex items-center gap-2.5">
-          <span className="grid h-6 w-6 place-items-center rounded bg-warn text-[13px] font-extrabold text-ink" aria-hidden="true">
-            ✓
-          </span>
-          <span className="text-[15px] font-extrabold tracking-tight">{PRODUCT_NAME}</span>
-        </div>
-        <div className="flex items-center gap-5 text-[12px] text-white/70">
-          {spot.enabled && (
-            <span title="Now and then the code shown for sign-off is a copy with a planted mistake. Accepting it is recorded.">
-              {spot.rate != null && spot.rate < 1 ? `About ${Math.round(spot.rate * 100)}% of first sign-offs are spot-checks` : "Sign-offs are spot-checked"}
-              {spot.checked > 0 && ` · people caught ${spot.caught} of ${spot.checked}`}
-            </span>
+      <header className="flex h-12 shrink-0 items-center justify-between gap-3 px-3 sm:px-4">
+        <div className="flex min-w-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setSideOpen(true)}
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-soft hover:bg-subtle hover:text-ink lg:hidden"
+            aria-label="Show the audit brief"
+          >
+            <PanelIcon size={17} />
+          </button>
+          <Brand onHome={() => go(null)} />
+          <span className="mx-1.5 hidden h-5 w-px shrink-0 bg-line sm:block" aria-hidden="true" />
+          {(
+            <Dropdown
+              label="Switch pull request"
+              trigger={(open) => (
+                <span className={`flex h-8 min-w-0 items-center gap-2 rounded-lg px-2 ${open ? "bg-subtle" : "hover:bg-subtle"}`}>
+                  <PullIcon size={17} className="shrink-0 text-soft" />
+                  <span className="shrink-0 text-[14.5px] font-semibold">PR #{pull.number}</span>
+                  <span className="min-w-0 truncate text-[14.5px] text-soft">{pull.title}</span>
+                  <ChevronDown size={15} className={`shrink-0 text-faint transition-transform ${open ? "rotate-180" : ""}`} />
+                </span>
+              )}
+            >
+              {(close) => (
+                <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      go(null);
+                      close();
+                    }}
+                    className="mb-1.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[14px] font-medium hover:bg-canvas"
+                  >
+                    <ArrowLeft size={15} className="text-soft" />
+                    All pull requests
+                  </button>
+                  <PullGroups
+                    pulls={pulls}
+                    selected={selected}
+                    inMenu
+                    onSelect={(number) => {
+                      select(number);
+                      close();
+                    }}
+                  />
+                  <div className="mt-2 border-t border-hair px-3 pb-1.5 pt-2.5">
+                    <RepoLink pulls={pulls} />
+                  </div>
+                </>
+              )}
+            </Dropdown>
           )}
-          <a href={pulls.repository_url} target="_blank" rel="noreferrer" className="font-mono hover:text-white" title="The repository this tool is watching">
-            {pulls.repository}
-          </a>
+          {pull.url && (
+            <a
+              href={pull.url}
+              target="_blank"
+              rel="noreferrer"
+              title={`Open pull request #${pull.number} on GitHub`}
+              aria-label={`Open pull request #${pull.number} on GitHub`}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-soft hover:bg-subtle hover:text-ink"
+            >
+              <GitHubMark size={16} />
+            </a>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          {exam && reviewer && (
+            <Dropdown
+              align="right"
+              label="AI reviewer under audit"
+              trigger={(open) => (
+                <span
+                  className={`flex h-[28.5px] items-center gap-2 rounded-lg px-2.5 text-[14px] font-medium text-ai transition-colors ${
+                    open ? "bg-ai-tint" : "bg-ai-wash hover:bg-ai-tint"
+                  }`}
+                >
+                  <BotIcon size={15} className="shrink-0" />
+                  <span className="hidden sm:inline">Auditing</span>
+                  <span className="max-w-[12rem] truncate">{prettyModel(reviewer.name)}</span>
+                  {exam.reviewers.length > 1 && <ChevronDown size={15} className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />}
+                </span>
+              )}
+            >
+              {(close) => (
+                <div>
+                  <p className="px-3 pb-1 pt-1 text-[12.5px] text-soft">AI reviewers of this pull request</p>
+                  {exam.reviewers.map((item) => {
+                    const active = item.name === reviewer.name;
+                    return (
+                      <button
+                        key={item.name}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={active}
+                        onClick={() => {
+                          setReviewerName(item.name);
+                          close();
+                        }}
+                        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left ${active ? "bg-canvas" : "hover:bg-canvas"}`}
+                      >
+                        <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-ai text-white">
+                          <BotIcon size={14} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[14px] font-medium">{prettyModel(item.name)}</span>
+                          <span className="block text-[12.5px] text-soft">
+                            {item.counts.defects_total > 0 ? `Noticed ${item.counts.defects_caught} of ${item.counts.defects_total} planted mistakes` : "Could not be tested"}
+                          </span>
+                        </span>
+                        {active && <CheckIcon size={15} className="shrink-0 text-soft" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </Dropdown>
+          )}
+          <Account pulls={pulls} compact />
         </div>
       </header>
 
-      <div className="relative flex min-h-0 flex-1">
-        {/*
-          The rail keeps its narrow place in the layout; opening it lays it over the page instead of pushing the page aside.
-          It opens on hover and on keyboard focus only, so it closes again after a click. Its box clips rather than hides
-          overflow, because a hidden box can still be scrolled sideways by focus, which would slide the badges out of sight.
-        */}
-        <nav aria-label="Pull requests" className="group/rail relative z-40 w-[4.25rem] shrink-0">
-          <div className="absolute inset-y-0 left-0 w-[4.25rem] overflow-clip border-r-2 border-ink bg-canvas transition-[width,box-shadow] duration-200 ease-out group-hover/rail:w-[20rem] group-hover/rail:shadow-[8px_0_24px_rgb(0_0_0/0.12)] group-hover/rail:delay-100 group-has-[:focus-visible]/rail:w-[20rem] group-has-[:focus-visible]/rail:shadow-[8px_0_24px_rgb(0_0_0/0.12)]">
-            <div className="thin-scroll h-full w-[20rem] space-y-2 overflow-y-auto px-2.5 py-3">
-              {group("Waiting for your audit", waiting)}
-              {group("Signed", signed)}
-              {group("Not tested yet", untested)}
+      <div className="flex min-h-0 flex-1 gap-4 px-2 pb-2 sm:px-4 sm:pb-4">
+        {/* Below the large breakpoint the side bar slides over the page instead of taking room from the code. */}
+        <AnimatePresence>
+          {sideOpen && (
+            <motion.div
+              key="scrim"
+              className="fixed inset-0 z-40 bg-ink/20 lg:hidden"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reduced ? 0 : 0.18 }}
+              onClick={() => setSideOpen(false)}
+            />
+          )}
+        </AnimatePresence>
+        <aside
+          className={`fixed inset-y-2 left-2 z-50 flex w-[260px] flex-col gap-3 rounded-2xl bg-canvas p-2 shadow-[var(--shadow-pop)] transition-transform duration-200 ease-out lg:static lg:z-auto lg:w-[240px] lg:shrink-0 lg:translate-x-0 lg:rounded-none lg:bg-transparent lg:p-0 lg:pt-1 lg:shadow-none ${
+            sideOpen ? "translate-x-0" : "-translate-x-[110%]"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {/* The way back to the board: the "Start audit" sweep, mirrored, so the colour runs the way you go. */}
+            <button
+              type="button"
+              onClick={() => go(null)}
+              className="group/back relative flex h-[36.5px] flex-1 items-center gap-2 overflow-hidden rounded-[10px] bg-subtle px-3 text-[14px] font-medium text-soft"
+            >
+              <span
+                aria-hidden="true"
+                className="absolute inset-0 origin-right scale-x-0 bg-gradient-to-l from-ai via-[#5a6be0] to-link transition-transform duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover/back:scale-x-100 group-focus-visible/back:scale-x-100 motion-reduce:transition-none"
+              />
+              <ArrowLeft
+                size={16}
+                className="relative transition-[transform,color] duration-300 group-hover/back:-translate-x-1 group-hover/back:text-white group-focus-visible/back:-translate-x-1 group-focus-visible/back:text-white motion-reduce:transition-none"
+              />
+              <span className="relative transition-colors duration-200 group-hover/back:text-white group-focus-visible/back:text-white">All pull requests</span>
+            </button>
+            <button type="button" onClick={() => setSideOpen(false)} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-soft hover:bg-subtle lg:hidden" aria-label="Close">
+              <XIcon size={16} />
+            </button>
+          </div>
+          <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
+            <div className="rounded-[14px] border border-hair bg-panel">
+              {/* The audit brief is drawn here by the review on screen; the slot stays mounted so it can. */}
+              <div ref={setBriefSlot} />
             </div>
           </div>
-        </nav>
+        </aside>
 
-        <main className="min-h-0 min-w-0 flex-1">
-        {!pull ? (
-          <p className="p-10 text-soft">No pull requests to show.</p>
-        ) : pull.status === "untested" ? (
-          <div className="mx-auto max-w-xl p-10">
-            <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-soft">Pull request #{pull.number}</p>
-            <h1 className="mt-1 text-[28px] font-extrabold leading-tight">{pull.title}</h1>
-            <div className="mt-6 rounded-lg border-2 border-ink bg-panel p-5 shadow-[var(--shadow-hard)]">
-              <p className="text-[17px] font-bold">This pull request has not been tested yet</p>
-              <p className="mt-2 text-soft">Run it from the project folder:</p>
-              <code className="mt-3 block overflow-x-auto rounded-md border-2 border-ink bg-canvas p-2.5 font-mono text-[12px]">
-                .venv/bin/python -m reviewer_controls.pipeline --change {pull.change_id} --kinds bug omission harmless
-              </code>
-              <button type="button" onClick={() => void loadPulls()} className="press mt-4 rounded-md bg-warn px-3 py-1.5 text-[13px] font-bold">
-                Check again
-              </button>
-            </div>
-          </div>
-        ) : !exam || !reviewer ? (
-          <p className="p-10 text-soft">{loadingExam ? "Loading the review…" : "No review to show."}</p>
-        ) : (
-          <Workspace
-            key={`${exam.change.id}|${reviewer.run_file}|${code}`}
-            exam={exam}
-            reviewer={reviewer}
-            code={code}
-            signoffs={signoffs}
-            onSign={sign}
-            onSaved={onSaved}
-            header={
-              // Says on every screen what the person is doing: auditing the review one AI model made of one pull request.
-              <div className="text-[12.5px] text-soft">
-                <div className="flex items-baseline gap-x-2.5">
-                  <span className="shrink-0 rounded-sm bg-ink px-1.5 py-px text-[11px] font-bold uppercase tracking-wide text-white">Audit of an AI review</span>
-                  <a href={pull.url} target="_blank" rel="noreferrer" className="shrink-0 font-bold text-ink underline underline-offset-2">
-                    Pull request #{pull.number}
-                  </a>
-                  <span className="min-w-0 truncate">{exam.change.requirement_title}</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowRequirement(!showRequirement)}
-                    aria-expanded={showRequirement}
-                    className="shrink-0 font-bold text-brand underline underline-offset-2 hover:text-ink"
-                  >
-                    {showRequirement ? "Hide" : "Read"} the requirement (issue {pull.requirement_id})
-                  </button>
-                  <span className="ml-auto flex shrink-0 items-baseline gap-1.5 pl-4">
-                    AI reviewer:
-                    {exam.reviewers.length > 1 ? (
-                      <select
-                        aria-label="AI reviewer under audit"
-                        value={reviewer.name}
-                        onChange={(event) => setReviewerName(event.target.value)}
-                        className="rounded border border-hair bg-panel px-1.5 py-0.5 text-[12.5px] font-bold text-ink"
-                      >
-                        {exam.reviewers.map((item) => (
-                          <option key={item.name} value={item.name}>
-                            {prettyModel(item.name)}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span className="font-bold text-ink">{prettyModel(reviewer.name)}</span>
-                    )}
-                  </span>
-                </div>
-                {showRequirement && (
-                  <div className="thin-scroll mt-3 max-h-64 overflow-y-auto rounded-lg border border-hair bg-canvas px-5 py-3 text-ink">
-                    <p className="text-[15px] font-bold">{exam.change.requirement_title}</p>
-                    <p className="mt-0.5 text-[12px] text-soft">
-                      Issue {pull.requirement_id}. The pull request was written by an AI agent to resolve the issue
-                      {totals && (
-                        <>
-                          : {exam.change.files.length} files, <span className="text-caught">+{totals.added}</span> <span className="text-missed">−{totals.removed}</span>
-                        </>
-                      )}
-                      . The review objectives were derived from the issue text.
-                    </p>
-                    <Prose text={requirementBody} />
-                  </div>
-                )}
-              </div>
-            }
-          />
-        )}
-        </main>
+        <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-hair bg-panel shadow-[var(--shadow-panel)]">{panel}</main>
       </div>
 
       {reveal && <SpotCheckReveal result={reveal.result} name={reveal.name} onContinue={continueAfterReveal} />}

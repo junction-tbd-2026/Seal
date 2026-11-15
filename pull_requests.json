@@ -9,7 +9,8 @@
       "requirement_id": "2283",
       "title": "Crash on a closed generic struct from a referenced assembly",
       "author": "AI agent",
-      "files": 4
+      "files": 4,
+      "opened_at": "2026-11-11T23:14:05Z"
     },
     {
       "number": 2,
@@ -17,7 +18,8 @@
       "requirement_id": "2234",
       "title": "Analyzer does not run when SuppressSourceGeneration is true",
       "author": "AI agent",
-      "files": 4
+      "files": 4,
+      "opened_at": "2026-11-11T23:00:52Z"
     },
     {
       "number": 3,
@@ -25,7 +27,8 @@
       "requirement_id": "2129",
       "title": "Generate a formatter for a type in a referenced assembly",
       "author": "AI agent",
-      "files": 28
+      "files": 28,
+      "opened_at": "2026-11-11T22:39:37Z"
     },
     {
       "number": 4,
@@ -33,7 +36,8 @@
       "requirement_id": "2297",
       "title": "Add ExcludeFromCodeCoverage to generated code",
       "author": "AI agent",
-      "files": 237
+      "files": 237,
+      "opened_at": "2026-11-12T12:12:22Z"
     }
   ]
 }
