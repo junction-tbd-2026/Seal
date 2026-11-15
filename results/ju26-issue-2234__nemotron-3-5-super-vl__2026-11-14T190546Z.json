@@ -1,0 +1,1023 @@
+{
+  "change": {
+    "id": "ju26-issue-2234",
+    "requirement_id": "2234",
+    "requirement_text": "# Requirement #2234: The analyzer does not work if SuppressSourceGeneration = true\n\nSource: https://github.com/MessagePack-CSharp/MessagePack-CSharp/issues/2234\n\n#### Bug description\n\nThe analyzer does not work if SuppressSourceGeneration = true. This has happened since version 3.1.1. It still worked in 3.1.0.\n",
+    "base_ref": "origin/ju26-issue-2234^",
+    "head_ref": "origin/ju26-issue-2234",
+    "diff": "diff --git a/README.md b/README.md\nindex c52f1088..3d37b675 100644\n--- a/README.md\n+++ b/README.md\n@@ -1617,6 +1617,20 @@ This code generation has a minor upfront performance cost.\n > Note: When using Unity, dynamic code generation only works when targeting .NET Framework 4.x + mono runtime.\n For all other Unity targets, AOT is required.\n \n+### Opting out of source generation\n+\n+A `[MessagePackObject]` type can opt out of source generation with `[MessagePackObject(SuppressSourceGeneration = true)]`.\n+No formatter is generated for that type. It is serialized at run time by the dynamic resolvers, which use reflection, so such a type is not AOT-safe.\n+\n+The analyzer still validates these types, because they are serialized at run time and must still have a valid contract:\n+- Members have a `[Key]` or `[IgnoreMember]` attribute ([MsgPack004](doc/analyzers/MsgPack004.md)).\n+- Keys are unique and all of the same kind ([MsgPack005](doc/analyzers/MsgPack005.md)).\n+- Non-public members require `AllowPrivate` ([MsgPack015](doc/analyzers/MsgPack015.md)).\n+- Members have types that are themselves serializable ([MsgPack003](doc/analyzers/MsgPack003.md)).\n+- Types are accessible to the resolver ([MsgPack012](doc/analyzers/MsgPack012.md)).\n+\n+The analyzer does not report the partial-class requirement ([MsgPack011](doc/analyzers/MsgPack011.md)) or the AOT-only checks ([MsgPack016](doc/analyzers/MsgPack016.md) and [MsgPack017](doc/analyzers/MsgPack017.md)) for these types, because they only apply when a formatter is generated.\n+\n ### Customizations\n \n You can customize the generated source through properties on the `GeneratedMessagePackResolverAttribute`.\ndiff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\nindex e121773d..470c93fc 100644\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1005,6 +1005,7 @@ public class TypeCollector\n                         if ((isIntKey && intKey == null) || (!isIntKey && stringKey == null))\n                         {\n                             this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.DoNotMixStringAndIntKeys, item.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation()));\n+                            continue; // The key kind does not match the other members; the diagnostic is reported, so skip this member.\n                         }\n                     }\n \n@@ -1019,7 +1020,10 @@ public class TypeCollector\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        intMembers.Add(member.IntKey, (member, item.Type));\n+                        if (!intMembers.ContainsKey(member.IntKey))\n+                        {\n+                            intMembers.Add(member.IntKey, (member, item.Type));\n+                        }\n                     }\n                     else if (stringKey is not null)\n                     {\n@@ -1032,7 +1036,10 @@ public class TypeCollector\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        stringMembers.Add(member.StringKey, (member, item.Type));\n+                        if (!stringMembers.ContainsKey(member.StringKey))\n+                        {\n+                            stringMembers.Add(member.StringKey, (member, item.Type));\n+                        }\n                     }\n \n                     var messagePackFormatter = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.FormatterAttribute))?.ConstructorArguments[0];\n@@ -1138,6 +1145,7 @@ public class TypeCollector\n                         if ((isIntKey && intKey == null) || (!isIntKey && stringKey == null))\n                         {\n                             this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.DoNotMixStringAndIntKeys, item.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation()));\n+                            continue; // The key kind does not match the other members; the diagnostic is reported, so skip this member.\n                         }\n                     }\n \n@@ -1152,7 +1160,10 @@ public class TypeCollector\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        intMembers.Add(member.IntKey, (member, item.Type));\n+                        if (!intMembers.ContainsKey(member.IntKey))\n+                        {\n+                            intMembers.Add(member.IntKey, (member, item.Type));\n+                        }\n                     }\n                     else\n                     {\n@@ -1165,7 +1176,10 @@ public class TypeCollector\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        stringMembers.Add(member.StringKey, (member, item.Type));\n+                        if (!stringMembers.ContainsKey(member.StringKey))\n+                        {\n+                            stringMembers.Add(member.StringKey, (member, item.Type));\n+                        }\n                     }\n \n                     var messagePackFormatter = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.FormatterAttribute))?.ConstructorArguments[0];\ndiff --git a/tests/MessagePack.SourceGenerator.ExecutionTests/SuppressedSourceGenerationTests.cs b/tests/MessagePack.SourceGenerator.ExecutionTests/SuppressedSourceGenerationTests.cs\nnew file mode 100644\nindex 00000000..9ba87c4e\n--- /dev/null\n+++ b/tests/MessagePack.SourceGenerator.ExecutionTests/SuppressedSourceGenerationTests.cs\n@@ -0,0 +1,37 @@\n+// Copyright (c) All contributors. All rights reserved.\n+// Licensed under the MIT license. See LICENSE file in the project root for full license information.\n+\n+/// <summary>\n+/// A type that opts out of source generation (https://github.com/MessagePack-CSharp/MessagePack-CSharp/issues/2234).\n+/// It must still serialize correctly through the run-time (dynamic) resolver.\n+/// </summary>\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class SuppressedSourceGenerationType\n+{\n+    [Key(0)]\n+    public int Id { get; set; }\n+\n+    [Key(1)]\n+    public string Name { get; set; } = string.Empty;\n+}\n+\n+public class SuppressedSourceGenerationTests\n+{\n+    [Fact]\n+    public void NoFormatterIsGeneratedForSuppressedType()\n+    {\n+        Assert.Null(GeneratedMessagePackResolver.Instance.GetFormatter<SuppressedSourceGenerationType>());\n+    }\n+\n+    [Fact]\n+    public void SuppressedTypeRoundTripsThroughDynamicResolver()\n+    {\n+        var value = new SuppressedSourceGenerationType { Id = 7, Name = \"seven\" };\n+\n+        byte[] bytes = MessagePackSerializer.Serialize(value, MessagePackSerializerOptions.Standard);\n+        SuppressedSourceGenerationType result = MessagePackSerializer.Deserialize<SuppressedSourceGenerationType>(bytes, MessagePackSerializerOptions.Standard);\n+\n+        Assert.Equal(7, result.Id);\n+        Assert.Equal(\"seven\", result.Name);\n+    }\n+}\ndiff --git a/tests/MessagePack.SourceGenerator.Tests/SuppressSourceGenerationAnalyzerTests.cs b/tests/MessagePack.SourceGenerator.Tests/SuppressSourceGenerationAnalyzerTests.cs\nnew file mode 100644\nindex 00000000..3aa556f9\n--- /dev/null\n+++ b/tests/MessagePack.SourceGenerator.Tests/SuppressSourceGenerationAnalyzerTests.cs\n@@ -0,0 +1,193 @@\n+// Copyright (c) All contributors. All rights reserved.\n+// Licensed under the MIT license. See LICENSE file in the project root for full license information.\n+\n+using MessagePack.Analyzers.CodeFixes;\n+using Microsoft.CodeAnalysis.CSharp;\n+using Microsoft.CodeAnalysis.Testing;\n+using VerifyCS = CSharpCodeFixVerifier<MessagePack.SourceGenerator.Analyzers.MsgPack00xMessagePackAnalyzer, MessagePack.Analyzers.CodeFixes.MessagePackCodeFixProvider>;\n+\n+/// <summary>\n+/// Verifies that the analyzer keeps validating <c>[MessagePackObject(SuppressSourceGeneration = true)]</c> types\n+/// (https://github.com/MessagePack-CSharp/MessagePack-CSharp/issues/2234).\n+/// Opting out of source generation only skips generation; the type is still serialized at run time, so its contract must still be checked.\n+/// </summary>\n+public class SuppressSourceGenerationAnalyzerTests\n+{\n+    private const string Preamble = @\"\n+using MessagePack;\n+\";\n+\n+    [Fact]\n+    public async Task MemberWithoutKeyIsReported()\n+    {\n+        string input = Preamble + @\"\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    public string {|MsgPack004:Member|} { get; set; }\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task AllowPrivateRequiredIsReported()\n+    {\n+        string input = Preamble + @\"\n+[{|MsgPack015:MessagePackObject(SuppressSourceGeneration = true)|}]\n+public class Foo\n+{\n+    [Key(0)]\n+    private string member;\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task MemberTypeMustBeMessagePackObjectIsReported()\n+    {\n+        string input = Preamble + @\"\n+public class Other\n+{\n+}\n+\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    [Key(0)]\n+    public Other {|MsgPack003:Member|} { get; set; }\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task DuplicateIntKeysAreReportedWithoutAnalyzerFailure()\n+    {\n+        string input = Preamble + @\"\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    [Key(0)]\n+    public string Member1 { get; set; }\n+\n+    {|MsgPack005:[Key(0)]\n+    public string Member2 { get; set; }|}\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task DuplicateStringKeysAreReportedWithoutAnalyzerFailure()\n+    {\n+        string input = Preamble + @\"\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    [Key(\"\"a\"\")]\n+    public string Member1 { get; set; }\n+\n+    {|MsgPack005:[Key(\"\"a\"\")]\n+    public string Member2 { get; set; }|}\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task MixedKeyKindsAreReportedWithoutAnalyzerFailure()\n+    {\n+        string input = Preamble + @\"\n+[MessagePackObject(SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    [Key(0)]\n+    public string Member1 { get; set; }\n+\n+    {|MsgPack005:[Key(\"\"Member2\"\")]\n+    public string Member2 { get; set; }|}\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task DuplicateKeysAreReportedWithoutAnalyzerFailureForGeneratedTypes()\n+    {\n+        string input = Preamble + @\"\n+[MessagePackObject]\n+public class Foo\n+{\n+    [Key(0)]\n+    public string Member1 { get; set; }\n+\n+    {|MsgPack005:[Key(0)]\n+    public string Member2 { get; set; }|}\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+            MarkupOptions = MarkupOptions.UseFirstDescriptor,\n+        }.RunAsync();\n+    }\n+\n+    [Fact]\n+    public async Task SourceGenerationOnlyDiagnosticsAreNotReportedWhenSuppressed()\n+    {\n+        // The partial-class requirement (MsgPack011) and the AOT-only checks (MsgPack016, MsgPack017)\n+        // only matter when a formatter is generated, so they are not reported for a suppressed type.\n+        string input = Preamble + @\"\n+[MessagePackObject(AllowPrivate = true, SuppressSourceGeneration = true)]\n+public class Foo\n+{\n+    [Key(0)]\n+    private string member;\n+\n+    [Key(1)]\n+    public string Prop1 { get; init; } = \"\"some default\"\";\n+\n+    [Key(2)]\n+    public string Prop2 { get; set; }\n+}\n+\";\n+\n+        await new VerifyCS.Test\n+        {\n+            TestCode = input,\n+        }.RunAsync();\n+    }\n+}\n"
+  },
+  "reviewer": "nemotron-3.5-super-vl",
+  "planter": "deepseek-ai/DeepSeek-V4.1-Flash",
+  "created_at": "2026-11-14T19:05:46Z",
+  "requirement_points": [
+    {
+      "id": "R1",
+      "text": "When SuppressSourceGeneration is true, the analyzer is still active and runs as part of the compilation."
+    },
+    {
+      "id": "R2",
+      "text": "When SuppressSourceGeneration is true, the analyzer reports its diagnostics for user code that violates its rules."
+    },
+    {
+      "id": "R3",
+      "text": "The analyzer does not require any source-generated types or files to be present in the compilation in order to produce its diagnostics."
+    },
+    {
+      "id": "R4",
+      "text": "The analyzer does not throw an exception or fail to load when SuppressSourceGeneration is true."
+    }
+  ],
+  "plants": [
+    {
+      "id": "p01",
+      "kind": "bug",
+      "description": "Changed continue to break, so after the first member whose key kind does not match the rest, the analyzer abandons the remaining members of the type and never reports their diagnostics.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1008,
+      "line_end": 1008,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1005,7 +1005,7 @@\n                         if ((isIntKey && intKey == null) || (!isIntKey && stringKey == null))\n                         {\n                             this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.DoNotMixStringAndIntKeys, item.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation()));\n-                            continue; // The key kind does not match the other members; the diagnostic is reported, so skip this member.\n+                             break; // The key kind does not match the other members; the diagnostic is reported, so skip this member.\n                         }\n                     }\n \n",
+      "difficulty": "easy",
+      "proven": null,
+      "breaks": "R2"
+    },
+    {
+      "id": "p02",
+      "kind": "bug",
+      "description": "Inverted the duplicate-key guard so the member is added only when the key is already present, causing Dictionary.Add to throw ArgumentException and the analyzer to fail.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1023,
+      "line_end": 1026,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1020,10 +1020,10 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!intMembers.ContainsKey(member.IntKey))\n-                        {\n-                            intMembers.Add(member.IntKey, (member, item.Type));\n-                        }\n+                         if (intMembers.ContainsKey(member.IntKey))\n+                         {\n+                             intMembers.Add(member.IntKey, (member, item.Type));\n+                         }\n                     }\n                     else if (stringKey is not null)\n                     {\n",
+      "difficulty": "medium",
+      "proven": null,
+      "breaks": "R4"
+    },
+    {
+      "id": "p03",
+      "kind": "bug",
+      "description": "Field members are registered under hiddenIntKey rather than member.IntKey, corrupting the int-key map and hiding duplicate-key diagnostics.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1163,
+      "line_end": 1166,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1160,10 +1160,10 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!intMembers.ContainsKey(member.IntKey))\n-                        {\n-                            intMembers.Add(member.IntKey, (member, item.Type));\n-                        }\n+                         if (!intMembers.ContainsKey(hiddenIntKey))\n+                         {\n+                             intMembers.Add(hiddenIntKey, (member, item.Type));\n+                         }\n                     }\n                     else\n                     {\n",
+      "difficulty": "hard",
+      "proven": null,
+      "breaks": "R3"
+    },
+    {
+      "id": "p04",
+      "kind": "bug",
+      "description": "The uniqueness check and dictionary key use member.Name instead of member.StringKey, so duplicate string keys are never detected and members are tracked under the wrong key.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1039,
+      "line_end": 1042,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1036,10 +1036,10 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!stringMembers.ContainsKey(member.StringKey))\n-                        {\n-                            stringMembers.Add(member.StringKey, (member, item.Type));\n-                        }\n+                         if (!stringMembers.ContainsKey(member.Name))\n+                         {\n+                             stringMembers.Add(member.Name, (member, item.Type));\n+                         }\n                     }\n \n                     var messagePackFormatter = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.FormatterAttribute))?.ConstructorArguments[0];\n",
+      "difficulty": "hard",
+      "proven": null,
+      "breaks": "R2"
+    },
+    {
+      "id": "p05",
+      "kind": "omission",
+      "description": "Removed the early continue for field members whose key kind does not match; the code now falls through and dereferences a null key, throwing NullReferenceException.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1148,
+      "line_end": 1148,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1145,7 +1145,6 @@\n                         if ((isIntKey && intKey == null) || (!isIntKey && stringKey == null))\n                         {\n                             this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.DoNotMixStringAndIntKeys, item.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation()));\n-                            continue; // The key kind does not match the other members; the diagnostic is reported, so skip this member.\n                         }\n                     }\n \n",
+      "difficulty": "medium",
+      "proven": null,
+      "breaks": "R4"
+    },
+    {
+      "id": "p06",
+      "kind": "harmless",
+      "description": "Equivalent boolean rewrite of the guard; no behaviour change.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1023,
+      "line_end": 1023,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1020,7 +1020,7 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!intMembers.ContainsKey(member.IntKey))\n+                         if (intMembers.ContainsKey(member.IntKey) == false)\n                         {\n                             intMembers.Add(member.IntKey, (member, item.Type));\n                         }\n",
+      "difficulty": "easy",
+      "proven": null,
+      "breaks": null
+    },
+    {
+      "id": "p07",
+      "kind": "harmless",
+      "description": "Indexer assignment is equivalent to Add here because the guard already checked absence.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1041,
+      "line_end": 1041,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1038,7 +1038,7 @@\n                         };\n                         if (!stringMembers.ContainsKey(member.StringKey))\n                         {\n-                            stringMembers.Add(member.StringKey, (member, item.Type));\n+                             stringMembers[member.StringKey] = (member, item.Type);\n                         }\n                     }\n \n",
+      "difficulty": "easy",
+      "proven": null,
+      "breaks": null
+    },
+    {
+      "id": "p08",
+      "kind": "harmless",
+      "description": "Equivalent pattern-based boolean rewrite of the guard; no behaviour change.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1163,
+      "line_end": 1163,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1160,7 +1160,7 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!intMembers.ContainsKey(member.IntKey))\n+                         if (intMembers.ContainsKey(member.IntKey) is false)\n                         {\n                             intMembers.Add(member.IntKey, (member, item.Type));\n                         }\n",
+      "difficulty": "easy",
+      "proven": null,
+      "breaks": null
+    },
+    {
+      "id": "p09",
+      "kind": "omission",
+      "description": "Removed the registration of int-keyed property members, so later members can never detect a duplicate int key and the KeysMustBeUnique diagnostic is no longer reported.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1023,
+      "line_end": 1023,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1020,10 +1020,6 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!intMembers.ContainsKey(member.IntKey))\n-                        {\n-                            intMembers.Add(member.IntKey, (member, item.Type));\n-                        }\n                     }\n                     else if (stringKey is not null)\n                     {\n",
+      "difficulty": "medium",
+      "proven": null,
+      "breaks": "R1"
+    },
+    {
+      "id": "p10",
+      "kind": "omission",
+      "description": "Removed the registration of string-keyed property members, so duplicate string keys go undetected and the analyzer stops reporting them.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1039,
+      "line_end": 1039,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1036,10 +1036,6 @@\n                         {\n                             DeclaringType = GetDeclaringTypeIfColliding(item),\n                         };\n-                        if (!stringMembers.ContainsKey(member.StringKey))\n-                        {\n-                            stringMembers.Add(member.StringKey, (member, item.Type));\n-                        }\n                     }\n \n                     var messagePackFormatter = item.GetAttributes().FirstOrDefault(x => x.AttributeClass.ApproximatelyEqual(this.typeReferences.FormatterAttribute))?.ConstructorArguments[0];\n",
+      "difficulty": "medium",
+      "proven": null,
+      "breaks": "R2"
+    }
+  ],
+  "original_review": {
+    "reviewer": "nemotron-3.5-super-vl",
+    "variant_id": "original",
+    "findings": [
+      {
+        "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+        "line_start": 1005,
+        "line_end": 1183,
+        "message": "The change does not include modifications to the analyzer that would make it process types with SuppressSourceGeneration = true. The TypeCollector.cs edits only add duplicate-key guards and a continue after a mixed-key diagnostic in the source generator's type collector; they do not address analyzer activation, diagnostic reporting, or exception safety for suppressed types. The analyzer may still skip suppressed types or fail to report diagnostics for them.",
+        "severity": "major"
+      }
+    ],
+    "meets_requirement": false,
+    "refused_to_decide": [],
+    "points": [
+      {
+        "id": "R1",
+        "status": "cannot_tell",
+        "evidence": [],
+        "reason": "No changes to analyzer activation logic are shown; the TypeCollector.cs changes are in the source generator and do not establish that the analyzer runs for suppressed types.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R2",
+        "status": "cannot_tell",
+        "evidence": [],
+        "reason": "No changes to analyzer diagnostic reporting are shown; the TypeCollector.cs changes do not establish that diagnostics are reported for suppressed types.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R3",
+        "status": "cannot_tell",
+        "evidence": [],
+        "reason": "No changes related to source-generated type dependencies are shown.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R4",
+        "status": "cannot_tell",
+        "evidence": [],
+        "reason": "The TypeCollector.cs changes prevent exceptions on duplicate keys, but it is unclear whether the analyzer uses this code or whether it would still throw when processing suppressed types.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      }
+    ],
+    "prompt_tokens": 4837,
+    "completion_tokens": 7032,
+    "seconds": 21.595422506332397,
+    "error": ""
+  },
+  "variant_reviews": [
+    {
+      "reviewer": "nemotron-3.5-super-vl",
+      "variant_id": "p01",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1005,
+          "line_end": 1008,
+          "message": "The only code change shown is in the source generator's TypeCollector (duplicate-key guards and mixed-key-kind skip). No analyzer source code is modified to keep the analyzer active, reporting diagnostics, or exception-free when SuppressSourceGeneration = true.",
+          "severity": "major"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [],
+      "points": [
+        {
+          "id": "R1",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that keeps the analyzer active when SuppressSourceGeneration is true.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that makes the analyzer report diagnostics for suppressed types.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that removes any dependency on source-generated types or files.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that prevents exceptions or load failures when SuppressSourceGeneration is true.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 4837,
+      "completion_tokens": 7307,
+      "seconds": 15.521825075149536,
+      "error": ""
+    },
+    {
+      "reviewer": "nemotron-3.5-super-vl",
+      "variant_id": "p02",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1023,
+          "line_end": 1026,
+          "message": "The condition `if (intMembers.ContainsKey(member.IntKey))` only adds to the dictionary when the key already exists, which skips new keys and throws ArgumentException on duplicates. This is the opposite of the intended behavior and inconsistent with the equivalent stringMembers change at lines 1039-1042 which correctly uses `!ContainsKey`.",
+          "severity": "major"
+        }
+      ],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "The analyzer code changes needed to make the analyzer active and report diagnostics for SuppressSourceGeneration = true types are not shown in the diff. The TypeCollector.cs changes are in the source generator and only address duplicate key handling, not the analyzer's activation or diagnostic reporting for suppressed types."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that activates the analyzer for types with SuppressSourceGeneration = true. The TypeCollector.cs changes are in the source generator and only address duplicate key handling.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that makes the analyzer report diagnostics for suppressed types. The new tests verify expected behavior but the corresponding analyzer modification is not present in the diff.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No change is shown that removes any dependency on source-generated types or files for the analyzer to produce diagnostics.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1023,
+              "line_end": 1026,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1039,
+              "line_end": 1042,
+              "in_change": true
+            }
+          ],
+          "reason": "The TypeCollector.cs changes prevent some dictionary exceptions on duplicate keys, but the intMembers change contains a logic bug that would itself throw. It cannot be confirmed from the diff that the analyzer does not throw or fail to load.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 4837,
+      "completion_tokens": 6999,
+      "seconds": 28.23586654663086,
+      "error": ""
+    },
+    {
+      "reviewer": "nemotron-3.5-super-vl",
+      "variant_id": "p03",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1005,
+          "line_end": 1042,
+          "message": "The shown changes add defensive ContainsKey checks and continue statements to avoid exceptions on duplicate or mixed keys, but none of the visible modifications reference SuppressSourceGeneration or change the analyzer's decision to analyze a type. The code that makes the analyzer active for suppressed types is not present in the diff.",
+          "severity": "major"
+        },
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1145,
+          "line_end": 1183,
+          "message": "Same as above: the second set of defensive changes does not reference SuppressSourceGeneration, so it cannot be confirmed from the shown diff that the analyzer processes suppressed types rather than skipping or crashing on them.",
+          "severity": "major"
+        },
+        {
+          "file": "tests/MessagePack.SourceGenerator.Tests/SuppressSourceGenerationAnalyzerTests.cs",
+          "line_start": 1,
+          "line_end": 192,
+          "message": "New tests verify analyzer diagnostics for suppressed types, but without the corresponding analyzer logic change being visible, it cannot be confirmed that the tests would pass or that R1-R3 are implemented.",
+          "severity": "minor"
+        }
+      ],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "Whether the analyzer's type-visit or activation logic was modified to process SuppressSourceGeneration = true types, because that code is not included in the shown diff."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No shown code change ensures the analyzer runs on types with SuppressSourceGeneration = true.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Tests are present but the enabling analyzer logic is not visible in the diff.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No shown code change confirms the analyzer produces diagnostics without source-generated types.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The TypeCollector.cs changes prevent some dictionary exceptions, but it cannot be confirmed from the diff that all code paths are safe for suppressed types.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 4839,
+      "completion_tokens": 6257,
+      "seconds": 20.437931776046753,
+      "error": ""
+    },
+    {
+      "reviewer": "nemotron-3.5-super-vl",
+      "variant_id": "p04",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1039,
+          "line_end": 1042,
+          "message": "stringMembers is checked and populated using member.Name instead of member.StringKey, so duplicate string keys can go undetected or unrelated members can be treated as colliding.",
+          "severity": "minor"
+        }
+      ],
+      "meets_requirement": null,
+      "refused_to_decide": [],
+      "points": [
+        {
+          "id": "R1",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff shows no change to the analyzer source code that keeps it active when SuppressSourceGeneration is true; the TypeCollector.cs changes do not reference SuppressSourceGeneration.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff shows no change to the analyzer source code that makes it report diagnostics for suppressed types; the TypeCollector.cs changes do not reference SuppressSourceGeneration.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff shows no change to the analyzer source code that removes any dependency on generated types; the TypeCollector.cs changes do not reference SuppressSourceGeneration.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff shows no change to the analyzer source code that prevents it from throwing when SuppressSourceGeneration is true; the TypeCollector.cs changes do not reference SuppressSourceGeneration.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 4835,
+      "completion_tokens": 11103,
+      "seconds": 30.54734992980957,
+      "error": ""
+    },
+    {
+      "reviewer": "nemotron-3.5-super-vl",
+      "variant_id": "p05",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1023,
+          "line_end": 1026,
+          "message": "The only code change guards against duplicate-key dictionary exceptions in the source generator's type collector. It does not modify the analyzer to evaluate types marked [MessagePackObject(SuppressSourceGeneration = true)], so the analyzer may still skip those types or fail to report diagnostics for them.",
+          "severity": "major"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [
+        "The analyzer implementation file is not included in the diff, so it cannot be determined whether the analyzer processes SuppressSourceGeneration types."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No analyzer code is shown that keeps the analyzer active for types with SuppressSourceGeneration = true.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No analyzer code is shown that reports diagnostics for suppressed types.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No analyzer code is shown that removes any dependency on source-generated types for suppressed types.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1023,
+              "line_end": 1026,
+              "in_change": true
+            }
+          ],
+          "reason": "The TypeCollector.cs change prevents one kind of exception on duplicate keys, but there is no evidence the analyzer itself will not throw or fail to load when SuppressSourceGeneration is true.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 4699,
+      "completion_tokens": 8619,
+      "seconds": 33.48671913146973,
+      "error": ""
+    },
+    {
+      "reviewer": "nemotron-3.5-super-vl",
+      "variant_id": "p06",
+      "findings": [],
+      "meets_requirement": true,
+      "refused_to_decide": [],
+      "points": [
+        {
+          "id": "R1",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The analyzer tests execute against types marked SuppressSourceGeneration = true and produce diagnostics, confirming the analyzer remains active and runs during compilation. Its citations were too broad to count as evidence.",
+          "dropped_evidence": 1,
+          "broad_evidence": 1
+        },
+        {
+          "id": "R2",
+          "status": "met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1007,
+              "line_end": 1008,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1147,
+              "line_end": 1148,
+              "in_change": true
+            }
+          ],
+          "reason": "Diagnostics are emitted for MsgPack004, MsgPack015, MsgPack003, and MsgPack005 on suppressed types; the `continue` after the diagnostic ensures the member is skipped without suppressing the report.",
+          "dropped_evidence": 1,
+          "broad_evidence": 1
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The analyzer tests use VerifyCS.Test with only source code and the analyzer; no source-generated types or files are involved, yet diagnostics are produced. Its citations were too broad to count as evidence.",
+          "dropped_evidence": 1,
+          "broad_evidence": 1
+        },
+        {
+          "id": "R4",
+          "status": "met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1023,
+              "line_end": 1026,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1039,
+              "line_end": 1042,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1163,
+              "line_end": 1166,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1179,
+              "line_end": 1182,
+              "in_change": true
+            }
+          ],
+          "reason": "`ContainsKey` guards replace unconditional `Dictionary.Add`, preventing `ArgumentException` on duplicate int/string keys so the analyzer does not throw or fail to load.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 4840,
+      "completion_tokens": 8568,
+      "seconds": 23.7295503616333,
+      "error": ""
+    },
+    {
+      "reviewer": "nemotron-3.5-super-vl",
+      "variant_id": "p07",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1005,
+          "line_end": 1183,
+          "message": "The change modifies the source generator's TypeCollector to tolerate duplicate keys and mixed key kinds, but it does not modify the analyzer (MsgPack00xMessagePackAnalyzer) or any code that selects which types to analyze. No change is shown that makes the analyzer process types marked with SuppressSourceGeneration = true, so the analyzer will still not run on or report diagnostics for those types.",
+          "severity": "major"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [],
+      "points": [
+        {
+          "id": "R1",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that keeps the analyzer active for types with SuppressSourceGeneration = true.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that reports diagnostics for user code in suppressed types.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that allows the analyzer to produce diagnostics for suppressed types without source-generated types being present.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that prevents the analyzer from failing when SuppressSourceGeneration is true.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 4838,
+      "completion_tokens": 5812,
+      "seconds": 41.50193643569946,
+      "error": ""
+    },
+    {
+      "reviewer": "nemotron-3.5-super-vl",
+      "variant_id": "p08",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1005,
+          "line_end": 1183,
+          "message": "Changes are in the source generator's TypeCollector, not in the analyzer. No analyzer code is modified, so the analyzer still will not run or report diagnostics for types with SuppressSourceGeneration = true.",
+          "severity": "major"
+        },
+        {
+          "file": "tests/MessagePack.SourceGenerator.Tests/SuppressSourceGenerationAnalyzerTests.cs",
+          "line_start": 1,
+          "line_end": 192,
+          "message": "New analyzer tests are added, but there is no corresponding implementation change in the analyzer to make them pass. The tests assert behavior the requirement demands, but the code to deliver that behavior is absent from the diff.",
+          "severity": "major"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [],
+      "points": [
+        {
+          "id": "R1",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "No analyzer source file is modified; the diff only touches the source generator's TypeCollector, README, and test files. Nothing shown makes the analyzer active for SuppressSourceGeneration = true types.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "No analyzer code change is present that would cause diagnostics to be reported for suppressed types. The new tests assert this behavior but lack implementation support.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that removes any dependency on generated types or files. The analyzer itself is not modified.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "No analyzer code change is shown that would prevent exceptions or load failures when SuppressSourceGeneration is true. The TypeCollector defensive changes are in the source generator, not the analyzer.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 4840,
+      "completion_tokens": 2763,
+      "seconds": 6.196658134460449,
+      "error": ""
+    },
+    {
+      "reviewer": "nemotron-3.5-super-vl",
+      "variant_id": "p09",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1005,
+          "line_end": 1008,
+          "message": "The TypeCollector.cs changes add defensive handling for duplicate keys and mixed key kinds, but none of the changed lines reference SuppressSourceGeneration. No analyzer code is modified to run when SuppressSourceGeneration is true, so the analyzer is not activated for suppressed types.",
+          "severity": "major"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [],
+      "points": [
+        {
+          "id": "R1",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "No code change is shown that makes the analyzer active when SuppressSourceGeneration is true.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "No code change is shown that makes the analyzer report diagnostics for suppressed types.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "No code change is shown that removes any dependency on source-generated types for the analyzer.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The TypeCollector.cs changes add defensive checks, but it cannot be determined from the diff whether they prevent analyzer failures for SuppressSourceGeneration types because the analyzer code is not modified.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 4784,
+      "completion_tokens": 10892,
+      "seconds": 29.007750988006592,
+      "error": ""
+    },
+    {
+      "reviewer": "nemotron-3.5-super-vl",
+      "variant_id": "p10",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1005,
+          "line_end": 1179,
+          "message": "The TypeCollector.cs changes are generic key-collision robustness fixes (continue after reporting a diagnostic, ContainsKey guard before dictionary insert) and contain no reference to SuppressSourceGeneration. No production code change is shown that makes the analyzer aware of SuppressSourceGeneration or ensures it continues to run and report diagnostics for types marked SuppressSourceGeneration = true.",
+          "severity": "major"
+        }
+      ],
+      "meets_requirement": null,
+      "refused_to_decide": [],
+      "points": [
+        {
+          "id": "R1",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No code shown that keeps the analyzer active for types with SuppressSourceGeneration = true.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No code shown that makes the analyzer report diagnostics for suppressed types.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "No code shown that removes any dependency on source-generated types or files.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1023,
+              "line_end": 1026,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1159,
+              "line_end": 1162,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1175,
+              "line_end": 1178,
+              "in_change": true
+            }
+          ],
+          "reason": "The ContainsKey guards and continue statements prevent some exceptions from duplicate keys, but it is not shown that these changes address the specific SuppressSourceGeneration failure described in the issue.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 4784,
+      "completion_tokens": 7837,
+      "seconds": 18.632510662078857,
+      "error": ""
+    }
+  ],
+  "outcomes": [
+    {
+      "plant_id": "p01",
+      "kind": "bug",
+      "reviewer": "nemotron-3.5-super-vl",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": true,
+      "point_id": "R2",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p02",
+      "kind": "bug",
+      "reviewer": "nemotron-3.5-super-vl",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": true,
+      "point_id": "R4",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p03",
+      "kind": "bug",
+      "reviewer": "nemotron-3.5-super-vl",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": true,
+      "point_id": "R3",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p04",
+      "kind": "bug",
+      "reviewer": "nemotron-3.5-super-vl",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": true,
+      "point_id": "R2",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p05",
+      "kind": "omission",
+      "reviewer": "nemotron-3.5-super-vl",
+      "flagged": false,
+      "correct": false,
+      "inconclusive": true,
+      "point_id": "R4",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p06",
+      "kind": "harmless",
+      "reviewer": "nemotron-3.5-super-vl",
+      "flagged": false,
+      "correct": true,
+      "inconclusive": true,
+      "point_id": null,
+      "point_noticed": null,
+      "point_link": null
+    },
+    {
+      "plant_id": "p07",
+      "kind": "harmless",
+      "reviewer": "nemotron-3.5-super-vl",
+      "flagged": true,
+      "correct": false,
+      "inconclusive": true,
+      "point_id": null,
+      "point_noticed": null,
+      "point_link": null
+    },
+    {
+      "plant_id": "p08",
+      "kind": "harmless",
+      "reviewer": "nemotron-3.5-super-vl",
+      "flagged": true,
+      "correct": false,
+      "inconclusive": true,
+      "point_id": null,
+      "point_noticed": null,
+      "point_link": null
+    },
+    {
+      "plant_id": "p09",
+      "kind": "omission",
+      "reviewer": "nemotron-3.5-super-vl",
+      "flagged": false,
+      "correct": false,
+      "inconclusive": true,
+      "point_id": "R1",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p10",
+      "kind": "omission",
+      "reviewer": "nemotron-3.5-super-vl",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": true,
+      "point_id": "R2",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    }
+  ],
+  "repeat_review": {
+    "reviewer": "nemotron-3.5-super-vl",
+    "variant_id": "repeat",
+    "findings": [
+      {
+        "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+        "line_start": 1005,
+        "line_end": 1183,
+        "message": "The changes in TypeCollector.cs are in the source generator project, not the analyzer. They add defensive checks for duplicate keys and mixed key kinds but do not modify the analyzer to process types marked with SuppressSourceGeneration = true. No analyzer code is changed to keep the analyzer active, report diagnostics, or avoid failures for suppressed types.",
+        "severity": "major"
+      },
+      {
+        "file": "tests/MessagePack.SourceGenerator.Tests/SuppressSourceGenerationAnalyzerTests.cs",
+        "line_start": 1,
+        "line_end": 192,
+        "message": "New analyzer tests are added that verify diagnostics are reported for SuppressSourceGeneration = true types, but there is no corresponding analyzer implementation change to make these tests pass. The tests cannot validate the fix without the analyzer code change.",
+        "severity": "major"
+      }
+    ],
+    "meets_requirement": false,
+    "refused_to_decide": [],
+    "points": [
+      {
+        "id": "R1",
+        "status": "not_met",
+        "evidence": [],
+        "reason": "No analyzer code change is shown that keeps the analyzer active for types with SuppressSourceGeneration = true. The only code changes are in the source generator's TypeCollector.cs and in tests.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R2",
+        "status": "not_met",
+        "evidence": [],
+        "reason": "No analyzer code change is shown that makes the analyzer report diagnostics for suppressed types. The tests assert this behavior but the implementation is missing.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R3",
+        "status": "not_met",
+        "evidence": [],
+        "reason": "No code change removes any dependency on source-generated types or files from the analyzer. The TypeCollector.cs changes are unrelated to this requirement.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R4",
+        "status": "not_met",
+        "evidence": [],
+        "reason": "No analyzer code change prevents exceptions or load failures when SuppressSourceGeneration is true. The TypeCollector.cs changes are in the source generator, not the analyzer, and do not address SuppressSourceGeneration.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      }
+    ],
+    "prompt_tokens": 4837,
+    "completion_tokens": 4086,
+    "seconds": 11.405997037887573,
+    "error": ""
+  },
+  "unstable_points": [
+    "R1",
+    "R2",
+    "R3",
+    "R4"
+  ],
+  "altered_requirement": "",
+  "altered_requirement_review": null,
+  "requirement_flip_changed_verdict": null,
+  "build_checked": false,
+  "prompt_tokens": 57807,
+  "completion_tokens": 87275,
+  "wall_seconds": 56.00601506233215,
+  "notes": [
+    "The reviewer answered differently on two identical reviews for R1, R2, R3, R4; those points are not scored.",
+    "Altered-requirement check skipped: the reviewer did not say the real change meets the requirement."
+  ]
+}

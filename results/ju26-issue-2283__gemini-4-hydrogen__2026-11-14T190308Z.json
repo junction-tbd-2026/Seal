@@ -1,0 +1,1133 @@
+{
+  "change": {
+    "id": "ju26-issue-2283",
+    "requirement_id": "2283",
+    "requirement_text": "# Requirement #2283: Generator and analyzer crash with IndexOutOfRangeException on a closed generic struct from a referenced assembly\n\nSource: https://github.com/MessagePack-CSharp/MessagePack-CSharp/issues/2283\n\n#### Bug description\n\nBoth `MessagePackGenerator` (CS8785) and `MsgPack00xMessagePackAnalyzer` (AD0001) throw `IndexOutOfRangeException` when a `[MessagePackObject]` type has a member whose type is a **closed generic value type defined in a referenced assembly**.\n\nBecause the generator then \"will not contribute to the output\", the compiling assembly silently ends up with **no generated resolver at all**. It is only a warning, so a normal build looks fine, but trimmed and NativeAOT apps fail at runtime. In our case three assemblies of a large app had been shipping without a resolver across two releases before we noticed.\n\n#### Repro steps\n\nTwo projects. `lib`:\n\n```csharp\nusing MessagePack;\nnamespace Lib;\n\n[MessagePackObject]\npublic partial record struct Item<T>([property: Key(0)] string Key);\n```\n\n`app`, with a `ProjectReference` to `lib`:\n\n```csharp\nusing MessagePack; using Lib;\nnamespace App;\n\n[MessagePackObject]\npublic sealed partial record Cmd([property: Key(0)] string Scope)\n{\n    [Key(1)] public Item<int> Member { get; init; }\n}\n```\n\nThen `dotnet build` on `app`. Both projects are in the attached `mp-repro.zip`.\n\n#### Expected behavior\n\nA clean build, with a generated resolver in `app`.\n\n#### Actual behavior\n\n```\nCSC : warning CS8785: Generator 'MessagePackGenerator' failed to generate source. It will not\ncontribute to the output and compilation errors may occur as a result. Exception was of type\n'IndexOutOfRangeException' with message 'Index was outside the bounds of the array.'.\nCSC : warning AD0001: Analyzer 'MessagePack.SourceGenerator.Analyzers.MsgPack00xMessagePackAnalyzer'\nthrew an exception of type 'System.IndexOutOfRangeException' with message 'Index was outside the\nbounds of the array.'.\n```\n\n`app.dll` contains no `GeneratedMessagePackResolver`.\n\n- Version used: MessagePack 3.1.8\n- Runtime: .NET 10 (SDK 10.0.204), Windows 11\n\n#### Additional context\n\n**What triggers it.** `Item` is declared in `lib`, `Cmd` in `app`:\n\n| `Item` declared as | result |\n|---|---|\n| `record struct Item<T>` | **crash** |\n| `struct Item<T>` | **crash** |\n| `struct Item` | ok |\n| `record struct Item` | ok |\n| `class Item<T>` | ok |\n| `record class Item<T>` | ok |\n\nSo it needs all three of: **generic**, **value type**, **from a referenced assembly**. Moving the identical `Item<T>` declaration into `app` itself makes the crash disappear, which is what makes this specific to metadata symbols.\n\n**Stack trace.**\n\n```\nSystem.IndexOutOfRangeException: Index was outside the bounds of the array.\n   at TypeCollector.GetObjectInfo(INamedTypeSymbol formattedType, ISymbol callerSymbol)\n   at TypeCollector.CollectGeneric(INamedTypeSymbol type, ISymbol callerSymbol) in TypeCollector.cs:line 661\n   at TypeCollector.CollectCore(ITypeSymbol typeSymbol, ISymbol callerSymbol) in TypeCollector.cs:line 371\n   at TypeCollector.GetObjectInfo(INamedTypeSymbol formattedType, ISymbol callerSymbol) in TypeCollector.cs:line 1062\n   at TypeCollector.CollectCore(ITypeSymbol typeSymbol, ISymbol callerSymbol) in TypeCollector.cs:line 386\n   at TypeCollector.Collect() in TypeCollector.cs:line 300\n   at MsgPack00xMessagePackAnalyzer.AnalyzeSymbol(SymbolAnalysisContext, ReferenceSymbols, AnalyzerOptions) in MsgPack00xMessagePackAnalyzer.cs:line 431\n```\n\n`CollectGeneric` line 661 is the closed-generic branch that calls `GetObjectInfo` directly:\n\n```csharp\nelse\n{\n    // NOTE: ... closed generic types such as `Foo<string>` are not registered as a formatter.\n    this.GetObjectInfo(type, callerSymbol);\n```\n\nso `GetObjectInfo` runs against a type that has no syntax. Several diagnostic paths inside it index `DeclaringSyntaxReferences[0]` directly (lines 735, 1009, 1101) instead of using `FirstOrDefault()` the way the neighbouring `GetIdentifierLocation` / `GetLocation` / `GetParameterListLocation` helpers already do, and that collection is empty for a metadata symbol. I did not narrow down which of the three fires.\n\n**Workaround.** Putting `[MessagePackFormatter(typeof(ItemFormatter<>))]` on the generic value type short-circuits `CollectCore` (line 356) before `GetObjectInfo` is reached, at the cost of hand-writing the formatter.\n\n**Possibly related:** #2092 reports CS8785 from the v3 generator, but with a different inner exception and no repro.\n",
+    "base_ref": "origin/ju26-issue-2283^",
+    "head_ref": "origin/ju26-issue-2283",
+    "diff": "diff --git a/README.md b/README.md\nindex c52f1088..5ae00d37 100644\n--- a/README.md\n+++ b/README.md\n@@ -1636,6 +1636,11 @@ Two assembly-level attributes exist to help with mixing in your own custom forma\n \n Learn more about using a mix of your own custom formatters and automatically generated ones in [the Analyzer section](#analyzer).\n \n+### Generic types from referenced assemblies\n+\n+Closed generic types defined in a referenced assembly (for example, `Item<int>` where `Item<T>` is defined in another project or NuGet package) can be used as members of your `[MessagePackObject]` types, including generic value types and record structs.\n+Diagnostics about the members of such a type are reported by the assembly that defines it rather than by the consuming project, so any problem must be fixed there.\n+\n ### MagicOnion\n \n [MagicOnion](https://github.com/Cysharp/MagicOnion) is a code-first gRPC framework based on grpc-dotnet and MessagePack. gRPC usually communicates with Protocol Buffers using IDL. But MagicOnion uses MessagePack for C# and does not need IDL. When communicating C# to C#, schemaless (or rather C# classes as schema) is better than using IDL.\ndiff --git a/doc/analyzers/MsgPack004.md b/doc/analyzers/MsgPack004.md\nindex 94bcdc10..a0fd5433 100644\n--- a/doc/analyzers/MsgPack004.md\n+++ b/doc/analyzers/MsgPack004.md\n@@ -45,3 +45,8 @@ public class C {\n     public int B { get; set; }\n }\n ```\n+\n+## Types from referenced assemblies\n+\n+This analyzer only reports on members declared in the project being compiled.\n+Members of a type defined in a referenced assembly are reported by the project that defines that type, so an unattributed public member of such a type must be fixed in its defining project.\ndiff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\nindex e121773d..c4ebe3e1 100644\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -236,7 +236,7 @@ public class TypeCollector\n     private TypeCollector(Compilation compilation, AnalyzerOptions options, ReferenceSymbols referenceSymbols, ITypeSymbol targetType, Action<Diagnostic>? reportAnalyzerDiagnostic, CancellationToken cancellationToken)\n     {\n         this.typeReferences = referenceSymbols;\n-        this.reportDiagnostic = reportAnalyzerDiagnostic;\n+        this.reportDiagnostic = reportAnalyzerDiagnostic is null ? null : diagnostic => ReportIfLocatedInCompilation(reportAnalyzerDiagnostic, diagnostic);\n         this.options = options;\n         this.compilation = compilation;\n         this.cancellationToken = cancellationToken;\n@@ -982,7 +982,7 @@ public class TypeCollector\n                     var stringKey = key is { Value: string stringKeyValue } ? stringKeyValue : default;\n                     if (intKey == null && stringKey == null)\n                     {\n-                        this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.BothStringAndIntKeyAreNull, ((PropertyDeclarationSyntax)item.DeclaringSyntaxReferences[0].GetSyntax()).Identifier.GetLocation(), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name));\n+                        this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.BothStringAndIntKeyAreNull, GetPropertyIdentifierLocation(item), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name));\n                     }\n \n                     // A property with an init accessor and an initializer has a default that will be discarded by the deserializer.\n@@ -1074,7 +1074,7 @@ public class TypeCollector\n                             {\n                                 Diagnostic diagnostic = derivedKeyAttribute is not null && suppressSourceGeneration is not true\n                                     ? Diagnostic.Create(MsgPack00xMessagePackAnalyzer.AOTDerivedKeyAttribute, derivedKeyAttribute.GetSyntax(this.cancellationToken).GetLocation())\n-                                    : Diagnostic.Create(MsgPack00xMessagePackAnalyzer.MemberNeedsKey, item.DeclaringSyntaxReferences[0].GetSyntax().GetLocation(), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name);\n+                                    : Diagnostic.Create(MsgPack00xMessagePackAnalyzer.MemberNeedsKey, item.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation(), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name);\n                                 if (nonPublicMembersAreSerialized || (item.DeclaredAccessibility & Accessibility.Public) == Accessibility.Public)\n                                 {\n                                     this.reportDiagnostic?.Invoke(diagnostic);\n@@ -1426,6 +1426,29 @@ public class TypeCollector\n \n     private static Location? GetIdentifierLocation(INamedTypeSymbol type) => ((BaseTypeDeclarationSyntax?)type.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax())?.Identifier.GetLocation();\n \n+    /// <summary>\n+    /// Gets the location of the identifier of a property, if it is declared in source.\n+    /// </summary>\n+    /// <param name=\"property\">The property symbol. It may be declared in metadata, in which case <see langword=\"null\" /> is returned.</param>\n+    /// <returns>The location of the identifier, or <see langword=\"null\" /> if the property has no declaration in source.</returns>\n+    private static Location? GetPropertyIdentifierLocation(IPropertySymbol property) => (property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as PropertyDeclarationSyntax)?.Identifier.GetLocation();\n+\n+    /// <summary>\n+    /// Reports a diagnostic only when its location belongs to the compilation being analyzed.\n+    /// </summary>\n+    /// <remarks>\n+    /// Types and members that come from metadata (or from another compilation) have no location in the compilation being analyzed.\n+    /// Their problems are reported by the compilation that defines them, so they are dropped here rather than being reported\n+    /// against a location that does not exist, which analyzers are not permitted to do.\n+    /// </remarks>\n+    private void ReportIfLocatedInCompilation(Action<Diagnostic> report, Diagnostic diagnostic)\n+    {\n+        if (diagnostic.Location.IsInSource && this.compilation.ContainsSyntaxTree(diagnostic.Location.SourceTree))\n+        {\n+            report(diagnostic);\n+        }\n+    }\n+\n     private static Location? GetLocation(IParameterSymbol parameter) => parameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation();\n \n     private static Location? GetParameterListLocation(IMethodSymbol? method) => ((BaseMethodDeclarationSyntax?)method?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax())?.ParameterList.GetLocation();\ndiff --git a/tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs b/tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs\nindex 283622c5..92cb3ac3 100644\n--- a/tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs\n+++ b/tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs\n@@ -1,7 +1,9 @@\n \ufeff// Copyright (c) All contributors. All rights reserved.\n // Licensed under the MIT license. See LICENSE file in the project root for full license information.\n \n+using Microsoft.CodeAnalysis;\n using Microsoft.CodeAnalysis.CSharp;\n+using Microsoft.CodeAnalysis.Testing;\n using VerifyCS = CSharpSourceGeneratorVerifier<MessagePack.SourceGenerator.MessagePackGenerator>;\n \n public class GenericsFormatterTests\n@@ -494,6 +496,193 @@ namespace TempProject\n         }.RunAsync();\n     }\n \n+    /// <summary>\n+    /// Asserts that a closed generic value type defined in a referenced <em>assembly</em> (metadata only, no syntax),\n+    /// used as a member type, does not crash the generator or analyzer.\n+    /// </summary>\n+    /// <remarks>\n+    /// See https://github.com/MessagePack-CSharp/MessagePack-CSharp/issues/2283.\n+    /// </remarks>\n+    [Fact]\n+    public async Task ClosedGenericStruct_FromMetadataReference()\n+    {\n+        string defineSource = \"\"\"\n+using MessagePack;\n+\n+namespace TempProject\n+{\n+    [MessagePackObject]\n+    public struct MyGenericStruct<T>\n+    {\n+        [Key(0)]\n+        public T Content { get; set; }\n+    }\n+}\n+\"\"\";\n+\n+        string usageSource = \"\"\"\n+using MessagePack;\n+\n+namespace TempProject\n+{\n+    [MessagePackObject]\n+    public class MyObject\n+    {\n+        [Key(0)]\n+        public MyGenericStruct<int> Value { get; set; }\n+    }\n+\n+    [GeneratedMessagePackResolver]\n+    partial class MyResolver { }\n+}\n+\"\"\";\n+\n+        await RunWithMetadataReferenceAsync(defineSource, usageSource, \"TempProject.MyResolver.g.cs\");\n+    }\n+\n+    /// <summary>\n+    /// Asserts that a closed generic <em>record struct</em> defined in a referenced assembly, used as a member type,\n+    /// does not crash the generator or analyzer.\n+    /// </summary>\n+    /// <remarks>\n+    /// See https://github.com/MessagePack-CSharp/MessagePack-CSharp/issues/2283.\n+    /// </remarks>\n+    [Fact]\n+    public async Task ClosedGenericRecordStruct_FromMetadataReference()\n+    {\n+        string defineSource = \"\"\"\n+using MessagePack;\n+\n+namespace Lib;\n+\n+[MessagePackObject]\n+public partial record struct Item<T>([property: Key(0)] string Key);\n+\"\"\";\n+\n+        string usageSource = \"\"\"\n+using MessagePack;\n+using Lib;\n+\n+namespace App;\n+\n+[MessagePackObject]\n+public sealed partial record Cmd([property: Key(0)] string Scope)\n+{\n+    [Key(1)]\n+    public Item<int> Member { get; init; }\n+}\n+\n+[GeneratedMessagePackResolver]\n+partial class AppResolver { }\n+\"\"\";\n+\n+        await RunWithMetadataReferenceAsync(defineSource, usageSource, \"App.AppResolver.g.cs\", LanguageVersion.Latest);\n+    }\n+\n+    /// <summary>\n+    /// Asserts that a closed generic value type from a referenced assembly whose members lack a key attribute\n+    /// does not crash the generator or analyzer, since its member diagnostics belong to the defining assembly.\n+    /// </summary>\n+    /// <remarks>\n+    /// See https://github.com/MessagePack-CSharp/MessagePack-CSharp/issues/2283.\n+    /// </remarks>\n+    [Fact]\n+    public async Task ClosedGenericStruct_FromMetadataReference_UnkeyedMember()\n+    {\n+        string defineSource = \"\"\"\n+using MessagePack;\n+\n+namespace TempProject\n+{\n+    [MessagePackObject]\n+    public struct MyGenericStruct<T>\n+    {\n+        [Key(0)]\n+        public string Key { get; set; }\n+\n+        public int Unkeyed { get; set; }\n+    }\n+}\n+\"\"\";\n+\n+        string usageSource = \"\"\"\n+using MessagePack;\n+\n+namespace TempProject\n+{\n+    [MessagePackObject]\n+    public class MyObject\n+    {\n+        [Key(0)]\n+        public MyGenericStruct<int> Value { get; set; }\n+    }\n+\n+    [GeneratedMessagePackResolver]\n+    partial class MyResolver { }\n+}\n+\"\"\";\n+\n+        await RunWithMetadataReferenceAsync(defineSource, usageSource, \"TempProject.MyResolver.g.cs\");\n+    }\n+\n+    /// <summary>\n+    /// Compiles <paramref name=\"defineSource\"/> to an assembly image, then verifies that the analyzers and the generator\n+    /// handle <paramref name=\"usageSource\"/> without diagnostics, referencing that image as metadata only,\n+    /// and that the resolver named <paramref name=\"expectedResolverHintName\"/> is generated.\n+    /// </summary>\n+    private static async Task RunWithMetadataReferenceAsync(string defineSource, string usageSource, string expectedResolverHintName, LanguageVersion languageVersion = LanguageVersion.CSharp7_3)\n+    {\n+        MetadataReference definingAssembly = await CompileToMetadataReferenceAsync(\"DefiningProject\", defineSource, languageVersion);\n+\n+        // Run the analyzers and the generator, failing on any diagnostic (the defect surfaced as AD0001 and CS8785).\n+        var test = new VerifyCS.Test(ReferencesSet.MessagePack)\n+        {\n+            LanguageVersion = languageVersion,\n+            TestBehaviors = TestBehaviors.SkipGeneratedSourcesCheck,\n+            TestState =\n+            {\n+                Sources = { usageSource },\n+            },\n+        };\n+        test.TestState.AdditionalReferences.Add(definingAssembly);\n+        await test.RunAsync();\n+\n+        // Verify that the resolver was actually generated for the usage assembly, since the defect caused it to be silently omitted.\n+        ImmutableArray<MetadataReference> frameworkReferences = await ReferenceAssemblies.Net.Net80.ResolveAsync(LanguageNames.CSharp, CancellationToken.None);\n+        Compilation usageCompilation = CreateCompilation(\"App\", usageSource, languageVersion, frameworkReferences.Concat(ReferencesHelper.GetReferences(ReferencesSet.MessagePack)).Append(definingAssembly));\n+        GeneratorDriverRunResult runResult = CSharpGeneratorDriver.Create(new MessagePack.SourceGenerator.MessagePackGenerator().AsSourceGenerator())\n+            .RunGenerators(usageCompilation)\n+            .GetRunResult();\n+        Assert.Empty(runResult.Diagnostics.Where(d => d.Severity >= DiagnosticSeverity.Warning));\n+        var hintNames = runResult.Results.SelectMany(r => r.GeneratedSources).Select(s => s.HintName).ToList();\n+        Assert.Contains(expectedResolverHintName, hintNames);\n+    }\n+\n+    private static async Task<MetadataReference> CompileToMetadataReferenceAsync(string assemblyName, string source, LanguageVersion languageVersion)\n+    {\n+        ImmutableArray<MetadataReference> frameworkReferences = await ReferenceAssemblies.Net.Net80.ResolveAsync(LanguageNames.CSharp, CancellationToken.None);\n+        Compilation compilation = CreateCompilation(assemblyName, source, languageVersion, frameworkReferences.Concat(ReferencesHelper.GetReferences(ReferencesSet.MessagePack)), OutputKind.DynamicallyLinkedLibrary);\n+\n+        using var stream = new MemoryStream();\n+        Microsoft.CodeAnalysis.Emit.EmitResult emitResult = compilation.Emit(stream);\n+        if (!emitResult.Success)\n+        {\n+            throw new InvalidOperationException(\"Failed to compile referenced assembly: \" + string.Join(Environment.NewLine, emitResult.Diagnostics));\n+        }\n+\n+        return MetadataReference.CreateFromImage(stream.ToArray());\n+    }\n+\n+    private static Compilation CreateCompilation(string assemblyName, string source, LanguageVersion languageVersion, IEnumerable<MetadataReference> references, OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary)\n+    {\n+        var parseOptions = CSharpParseOptions.Default.WithLanguageVersion(languageVersion);\n+        return CSharpCompilation.Create(\n+            assemblyName,\n+            new[] { CSharpSyntaxTree.ParseText(source, parseOptions) },\n+            references.ToArray(),\n+            new CSharpCompilationOptions(outputKind));\n+    }\n+\n     /// <summary>\n     /// Asserts that the generator can handle directly recursive generic constraints.\n     /// </summary>\n"
+  },
+  "reviewer": "gemini-4-hydrogen",
+  "planter": "deepseek-ai/DeepSeek-V4.1-Flash",
+  "created_at": "2026-11-14T19:03:08Z",
+  "requirement_points": [
+    {
+      "id": "R1",
+      "text": "For a [MessagePackObject] type in the compiling assembly that has a member whose type is a closed generic value type declared in a referenced assembly, the source generator completes without throwing IndexOutOfRangeException and does not emit CS8785."
+    },
+    {
+      "id": "R2",
+      "text": "For the same scenario, the MsgPack00xMessagePackAnalyzer completes without throwing IndexOutOfRangeException and does not emit AD0001."
+    },
+    {
+      "id": "R3",
+      "text": "The compiling assembly receives a generated MessagePack resolver that includes the [MessagePackObject] type."
+    },
+    {
+      "id": "R4",
+      "text": "The generated resolver contains a formatter entry for the closed generic value type member (e.g., Item<int>), so the member is covered by the resolver."
+    }
+  ],
+  "plants": [
+    {
+      "id": "p01",
+      "kind": "bug",
+      "description": "The location guard around the analyzer reporter is dropped, so diagnostics whose location is not part of the compilation being analyzed (metadata symbols have no source location) are now reported and the analyzer driver throws AD0001.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 239,
+      "line_end": 239,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -236,7 +236,7 @@\n     private TypeCollector(Compilation compilation, AnalyzerOptions options, ReferenceSymbols referenceSymbols, ITypeSymbol targetType, Action<Diagnostic>? reportAnalyzerDiagnostic, CancellationToken cancellationToken)\n     {\n         this.typeReferences = referenceSymbols;\n-        this.reportDiagnostic = reportAnalyzerDiagnostic is null ? null : diagnostic => ReportIfLocatedInCompilation(reportAnalyzerDiagnostic, diagnostic);\n+        this.reportDiagnostic = reportAnalyzerDiagnostic;\n         this.options = options;\n         this.compilation = compilation;\n         this.cancellationToken = cancellationToken;\n",
+      "difficulty": "medium",
+      "proven": null,
+      "breaks": "R2"
+    },
+    {
+      "id": "p02",
+      "kind": "bug",
+      "description": "This Diagnostic.Create is evaluated unconditionally (its result is stored in a local before the reporter is consulted), so indexing DeclaringSyntaxReferences[0] throws IndexOutOfRangeException during the generator run as well, yielding CS8785 and no resolver.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1077,
+      "line_end": 1077,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1074,7 +1074,7 @@\n                             {\n                                 Diagnostic diagnostic = derivedKeyAttribute is not null && suppressSourceGeneration is not true\n                                     ? Diagnostic.Create(MsgPack00xMessagePackAnalyzer.AOTDerivedKeyAttribute, derivedKeyAttribute.GetSyntax(this.cancellationToken).GetLocation())\n-                                    : Diagnostic.Create(MsgPack00xMessagePackAnalyzer.MemberNeedsKey, item.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation(), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name);\n+                            : Diagnostic.Create(MsgPack00xMessagePackAnalyzer.MemberNeedsKey, item.DeclaringSyntaxReferences[0].GetSyntax().GetLocation(), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name);\n                                 if (nonPublicMembersAreSerialized || (item.DeclaredAccessibility & Accessibility.Public) == Accessibility.Public)\n                                 {\n                                     this.reportDiagnostic?.Invoke(diagnostic);\n",
+      "difficulty": "medium",
+      "proven": null,
+      "breaks": "R1"
+    },
+    {
+      "id": "p03",
+      "kind": "bug",
+      "description": "The null-safe GetPropertyIdentifierLocation helper is bypassed and DeclaringSyntaxReferences is indexed directly, so a member whose type comes from metadata (no syntax) throws IndexOutOfRangeException in the analyzer and produces AD0001.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 985,
+      "line_end": 985,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -982,7 +982,7 @@\n                     var stringKey = key is { Value: string stringKeyValue } ? stringKeyValue : default;\n                     if (intKey == null && stringKey == null)\n                     {\n-                        this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.BothStringAndIntKeyAreNull, GetPropertyIdentifierLocation(item), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name));\n+                        this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.BothStringAndIntKeyAreNull, item.DeclaringSyntaxReferences[0].GetSyntax().GetLocation(), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name));\n                     }\n \n                     // A property with an init accessor and an initializer has a default that will be discarded by the deserializer.\n",
+      "difficulty": "medium",
+      "proven": null,
+      "breaks": "R2"
+    },
+    {
+      "id": "p04",
+      "kind": "harmless",
+      "description": "Explicit delegate creation instead of a lambda conversion; identical behaviour.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 239,
+      "line_end": 239,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -236,7 +236,7 @@\n     private TypeCollector(Compilation compilation, AnalyzerOptions options, ReferenceSymbols referenceSymbols, ITypeSymbol targetType, Action<Diagnostic>? reportAnalyzerDiagnostic, CancellationToken cancellationToken)\n     {\n         this.typeReferences = referenceSymbols;\n-        this.reportDiagnostic = reportAnalyzerDiagnostic is null ? null : diagnostic => ReportIfLocatedInCompilation(reportAnalyzerDiagnostic, diagnostic);\n+        this.reportDiagnostic = reportAnalyzerDiagnostic is null ? null : new Action<Diagnostic>(diagnostic => ReportIfLocatedInCompilation(reportAnalyzerDiagnostic, diagnostic));\n         this.options = options;\n         this.compilation = compilation;\n         this.cancellationToken = cancellationToken;\n",
+      "difficulty": "easy",
+      "proven": null,
+      "breaks": null
+    },
+    {
+      "id": "p05",
+      "kind": "harmless",
+      "description": "Renames the helper's parameter from property to symbol (and its doc tag); no behavioural change.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1429,
+      "line_end": 1434,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1429,9 +1429,9 @@\n     /// <summary>\n     /// Gets the location of the identifier of a property, if it is declared in source.\n     /// </summary>\n-    /// <param name=\"property\">The property symbol. It may be declared in metadata, in which case <see langword=\"null\" /> is returned.</param>\n+    /// <param name=\"symbol\">The property symbol. It may be declared in metadata, in which case <see langword=\"null\" /> is returned.</param>\n     /// <returns>The location of the identifier, or <see langword=\"null\" /> if the property has no declaration in source.</returns>\n-    private static Location? GetPropertyIdentifierLocation(IPropertySymbol property) => (property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as PropertyDeclarationSyntax)?.Identifier.GetLocation();\n+    private static Location? GetPropertyIdentifierLocation(IPropertySymbol symbol) => (symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as PropertyDeclarationSyntax)?.Identifier.GetLocation();\n \n     /// <summary>\n     /// Reports a diagnostic only when its location belongs to the compilation being analyzed.\n",
+      "difficulty": "easy",
+      "proven": null,
+      "breaks": null
+    },
+    {
+      "id": "p06",
+      "kind": "harmless",
+      "description": "Renames the local callback parameter report to reportAction; no behavioural change.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1444,
+      "line_end": 1450,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1441,11 +1441,11 @@\n     /// Their problems are reported by the compilation that defines them, so they are dropped here rather than being reported\n     /// against a location that does not exist, which analyzers are not permitted to do.\n     /// </remarks>\n-    private void ReportIfLocatedInCompilation(Action<Diagnostic> report, Diagnostic diagnostic)\n+    private void ReportIfLocatedInCompilation(Action<Diagnostic> reportAction, Diagnostic diagnostic)\n     {\n         if (diagnostic.Location.IsInSource && this.compilation.ContainsSyntaxTree(diagnostic.Location.SourceTree))\n         {\n-            report(diagnostic);\n+            reportAction(diagnostic);\n         }\n     }\n \n",
+      "difficulty": "easy",
+      "proven": null,
+      "breaks": null
+    },
+    {
+      "id": "p07",
+      "kind": "bug",
+      "description": "Only the IsInSource half of the guard is kept; the ContainsSyntaxTree check is gone, so a symbol that originates from another compilation (project reference) still has syntax references in that compilation's trees and the analyzer now reports a location outside the current compilation, which the driver rejects with AD0001.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 239,
+      "line_end": 245,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -236,7 +236,13 @@\n     private TypeCollector(Compilation compilation, AnalyzerOptions options, ReferenceSymbols referenceSymbols, ITypeSymbol targetType, Action<Diagnostic>? reportAnalyzerDiagnostic, CancellationToken cancellationToken)\n     {\n         this.typeReferences = referenceSymbols;\n-        this.reportDiagnostic = reportAnalyzerDiagnostic is null ? null : diagnostic => ReportIfLocatedInCompilation(reportAnalyzerDiagnostic, diagnostic);\n+        this.reportDiagnostic = reportAnalyzerDiagnostic is null ? null : diagnostic =>\n+        {\n+            if (diagnostic.Location.IsInSource)\n+            {\n+                reportAnalyzerDiagnostic(diagnostic);\n+            }\n+        };\n         this.options = options;\n         this.compilation = compilation;\n         this.cancellationToken = cancellationToken;\n",
+      "difficulty": "hard",
+      "proven": null,
+      "breaks": "R2"
+    },
+    {
+      "id": "p08",
+      "kind": "omission",
+      "description": "The reporter is no longer null when running inside the source generator, so the generator now invokes the callback and dereferences the (null) analyzer reporter for any in-source diagnostic, aborting the generator with CS8785.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 239,
+      "line_end": 239,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -236,7 +236,7 @@\n     private TypeCollector(Compilation compilation, AnalyzerOptions options, ReferenceSymbols referenceSymbols, ITypeSymbol targetType, Action<Diagnostic>? reportAnalyzerDiagnostic, CancellationToken cancellationToken)\n     {\n         this.typeReferences = referenceSymbols;\n-        this.reportDiagnostic = reportAnalyzerDiagnostic is null ? null : diagnostic => ReportIfLocatedInCompilation(reportAnalyzerDiagnostic, diagnostic);\n+        this.reportDiagnostic = diagnostic => ReportIfLocatedInCompilation(reportAnalyzerDiagnostic!, diagnostic);\n         this.options = options;\n         this.compilation = compilation;\n         this.cancellationToken = cancellationToken;\n",
+      "difficulty": "medium",
+      "proven": null,
+      "breaks": "R1"
+    },
+    {
+      "id": "p09",
+      "kind": "omission",
+      "description": "The null-returning location helper is replaced by First(), which throws InvalidOperationException for members declared in metadata; the analyzer no longer completes cleanly and emits AD0001.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 985,
+      "line_end": 985,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -982,7 +982,7 @@\n                     var stringKey = key is { Value: string stringKeyValue } ? stringKeyValue : default;\n                     if (intKey == null && stringKey == null)\n                     {\n-                        this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.BothStringAndIntKeyAreNull, GetPropertyIdentifierLocation(item), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name));\n+                        this.reportDiagnostic?.Invoke(Diagnostic.Create(MsgPack00xMessagePackAnalyzer.BothStringAndIntKeyAreNull, item.DeclaringSyntaxReferences.First().GetSyntax().GetLocation(), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name));\n                     }\n \n                     // A property with an init accessor and an initializer has a default that will be discarded by the deserializer.\n",
+      "difficulty": "medium",
+      "proven": null,
+      "breaks": "R2"
+    },
+    {
+      "id": "p10",
+      "kind": "omission",
+      "description": "Using the null-forgiving operator instead of the null-conditional removes the tolerance for metadata members; the resulting NullReferenceException aborts the generator, so the compiling assembly gets no generated resolver at all.",
+      "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+      "line_start": 1077,
+      "line_end": 1077,
+      "patch": "diff --git a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n--- a/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n+++ b/src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs\n@@ -1074,7 +1074,7 @@\n                             {\n                                 Diagnostic diagnostic = derivedKeyAttribute is not null && suppressSourceGeneration is not true\n                                     ? Diagnostic.Create(MsgPack00xMessagePackAnalyzer.AOTDerivedKeyAttribute, derivedKeyAttribute.GetSyntax(this.cancellationToken).GetLocation())\n-                                    : Diagnostic.Create(MsgPack00xMessagePackAnalyzer.MemberNeedsKey, item.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation(), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name);\n+                            : Diagnostic.Create(MsgPack00xMessagePackAnalyzer.MemberNeedsKey, item.DeclaringSyntaxReferences.FirstOrDefault()!.GetSyntax().GetLocation(), formattedType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat), item.Name);\n                                 if (nonPublicMembersAreSerialized || (item.DeclaredAccessibility & Accessibility.Public) == Accessibility.Public)\n                                 {\n                                     this.reportDiagnostic?.Invoke(diagnostic);\n",
+      "difficulty": "hard",
+      "proven": null,
+      "breaks": "R1"
+    }
+  ],
+  "original_review": {
+    "reviewer": "gemini-4-hydrogen",
+    "variant_id": "original",
+    "findings": [],
+    "meets_requirement": null,
+    "refused_to_decide": [
+      "Whether TypeCollector.cs still contains an unfixed DeclaringSyntaxReferences[0] dereference around line 735 (as mentioned in the issue description) or in other unseen paths, because only four hunks of TypeCollector.cs are shown and the tests were not executed.",
+      "Whether the generated resolver for the compiling assembly includes the [MessagePackObject] type and a formatter entry for the closed generic value type member (e.g., Item<int>), because resolver generation and CollectGeneric code are not in the diff and the added tests only assert the generated file's HintName."
+    ],
+    "points": [
+      {
+        "id": "R1",
+        "status": "cannot_tell",
+        "evidence": [],
+        "reason": "The diff fixes two DeclaringSyntaxReferences[0] sites in TypeCollector.cs and adds tests, but the rest of TypeCollector.cs (including the third DeclaringSyntaxReferences[0] path around line 735 noted in the issue) is not shown and test execution results are not available.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R2",
+        "status": "cannot_tell",
+        "evidence": [],
+        "reason": "The diff adds compilation-tree filtering and fixes two diagnostic locations in TypeCollector.cs, but unseen code in TypeCollector.cs and MsgPack00xMessagePackAnalyzer.cs prevents confirming that no other metadata-symbol crash path remains.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R3",
+        "status": "cannot_tell",
+        "evidence": [],
+        "reason": "The added test only asserts that the resolver hint name is present in GeneratedSources without checking the generated resolver's contents, and the resolver generation code is not shown in the diff.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R4",
+        "status": "cannot_tell",
+        "evidence": [],
+        "reason": "Neither CollectGeneric nor resolver formatter registration code is shown in the diff (where the issue quotes a comment stating closed generic types are not registered as a formatter), and the added tests do not inspect the generated resolver for a closed generic value type entry.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      }
+    ],
+    "prompt_tokens": 6355,
+    "completion_tokens": 516,
+    "seconds": 74.8230996131897,
+    "error": ""
+  },
+  "variant_reviews": [
+    {
+      "reviewer": "gemini-4-hydrogen",
+      "variant_id": "p01",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1444,
+          "line_end": 1450,
+          "message": "ReportIfLocatedInCompilation is added to drop diagnostics whose locations are not in the analyzed compilation, but it is never called in TypeCollector.cs. Lines 985 and 1079 still invoke this.reportDiagnostic?.Invoke(...) directly when GetPropertyIdentifierLocation(item) or item.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax().GetLocation() returns null for metadata symbols, causing BothStringAndIntKeyAreNull and MemberNeedsKey (MsgPack004) to still be reported with Location.None in the consuming assembly, contrary to doc/analyzers/MsgPack004.md and README.md.",
+          "severity": "major"
+        }
+      ],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "Whether TypeCollector.cs contains any remaining unguarded DeclaringSyntaxReferences[0] accesses (such as the line 735 site mentioned in the issue), because lines 1-981 and 1081-1426 of TypeCollector.cs are omitted from the diff.",
+        "Whether CSharpSourceGeneratorVerifier<MessagePackGenerator> in GenericsFormatterTests.cs also executes MsgPack00xMessagePackAnalyzer, because the verifier implementation is not part of the diff.",
+        "Whether the generated resolver actually registers the [MessagePackObject] type and a formatter entry for the closed generic value type member, because resolver emission code and generated output assertions are not shown."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff fixes two DeclaringSyntaxReferences[0] accesses in TypeCollector.cs (lines 985 and 1077) and adds tests in GenericsFormatterTests.cs (lines 506-659), but lines 1-981 of TypeCollector.cs (including the third site around line 735 mentioned in the issue) and test execution results are not shown.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Lines 1-981 of TypeCollector.cs and MsgPack00xMessagePackAnalyzer.cs are not shown, and the diff does not show whether CSharpSourceGeneratorVerifier runs MsgPack00xMessagePackAnalyzer or whether all IndexOutOfRangeException paths in the analyzer are eliminated.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The added test helper RunWithMetadataReferenceAsync only asserts that expectedResolverHintName is present in generated hintNames (GenericsFormatterTests.cs line 658) and does not inspect the generated resolver source to confirm the [MessagePackObject] type is included.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Neither TypeCollector's generic/formatter collection logic nor the generated resolver source is shown in the diff, and the new tests do not verify that the generated resolver contains a formatter entry for the closed generic value type member.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 6205,
+      "completion_tokens": 797,
+      "seconds": 31.385348558425903,
+      "error": ""
+    },
+    {
+      "reviewer": "gemini-4-hydrogen",
+      "variant_id": "p02",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1075,
+          "line_end": 1080,
+          "message": "Line 1077 still indexes item.DeclaringSyntaxReferences[0] directly (only its indentation changed) and constructs the Diagnostic before checking whether this.reportDiagnostic is null. For a closed generic value type from a referenced assembly with an unkeyed member (such as in ClosedGenericStruct_FromMetadataReference_UnkeyedMember), DeclaringSyntaxReferences is empty, causing IndexOutOfRangeException in both MessagePackGenerator (CS8785) and MsgPack00xMessagePackAnalyzer (AD0001).",
+          "severity": "critical"
+        },
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1434,
+          "line_end": 1449,
+          "message": "GetPropertyIdentifierLocation casts syntax to PropertyDeclarationSyntax, which returns null for ParameterSyntax (record primary-constructor properties). When combined with ReportIfLocatedInCompilation, BothStringAndIntKeyAreNull (line 985) is silently dropped instead of reported even for record types declared in the compiling assembly.",
+          "severity": "minor"
+        },
+        {
+          "file": "tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs",
+          "line_start": 656,
+          "line_end": 658,
+          "message": "RunWithMetadataReferenceAsync only checks that expectedResolverHintName is present in hintNames and does not inspect the generated resolver content to verify that the [MessagePackObject] type or a formatter entry for the closed generic struct member is included.",
+          "severity": "minor"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [
+        "Whether closed generic value types whose members all have valid [Key] attributes (e.g., ClosedGenericRecordStruct_FromMetadataReference) avoid all other DeclaringSyntaxReferences[0] accesses in TypeCollector.GetObjectInfo, because the earlier parts of GetObjectInfo (such as around line 735 mentioned in the issue) are not shown in the diff.",
+        "Whether the generated resolver includes entries for the [MessagePackObject] type and the closed generic value type member (R3 and R4) when generation succeeds, because resolver emission code is not in the diff and RunWithMetadataReferenceAsync only checks the generated file hint name."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "Line 1077 of TypeCollector.cs still evaluates item.DeclaringSyntaxReferences[0].GetSyntax().GetLocation() unconditionally even when reportDiagnostic is null, so MessagePackGenerator still throws IndexOutOfRangeException (CS8785) when the referenced closed generic value type has an unkeyed member.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "not_met",
+          "evidence": [],
+          "reason": "Line 1077 of TypeCollector.cs still indexes item.DeclaringSyntaxReferences[0] directly, so MsgPack00xMessagePackAnalyzer still throws IndexOutOfRangeException (AD0001) when the referenced closed generic value type has an unkeyed member.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "For the unkeyed-member case generation still crashes before producing a resolver, and for keyed-only cases neither the resolver generation code nor an assertion on the generated resolver contents is shown in the diff.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Neither CollectGeneric/resolver-generation code nor any test assertion checking the generated resolver source for a closed generic value type formatter entry (e.g., Item<int>) is shown in the diff.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 6352,
+      "completion_tokens": 969,
+      "seconds": 41.70773530006409,
+      "error": ""
+    },
+    {
+      "reviewer": "gemini-4-hydrogen",
+      "variant_id": "p03",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 983,
+          "line_end": 986,
+          "message": "Line 985 still indexes item.DeclaringSyntaxReferences[0] directly inside Diagnostic.Create(...), which is evaluated even when this.reportDiagnostic is null in the source generator. For a metadata property on a closed generic value type from a referenced assembly whose [Key] attribute has both intKey and stringKey equal to null, DeclaringSyntaxReferences is empty and this throws IndexOutOfRangeException (causing CS8785 in the generator and AD0001 in the analyzer). In addition, changing to GetSyntax().GetLocation() widens the diagnostic span from the property identifier to the full property declaration while leaving the newly added GetPropertyIdentifierLocation helper at line 1434 unused.",
+          "severity": "critical"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [
+        "Whether any other unshown lines in TypeCollector.cs (such as around line 735 mentioned in the issue description) still index DeclaringSyntaxReferences[0] on metadata symbols, because those regions are not in the diff and test execution output is not provided.",
+        "Whether the generated resolver includes the [MessagePackObject] type (R3) and a formatter entry for the closed generic value type member (R4), because resolver emission code is not in the diff and the new tests only assert the generated file's hint name."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "not_met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 985,
+              "line_end": 985,
+              "in_change": true
+            }
+          ],
+          "reason": "TypeCollector.cs line 985 still directly indexes item.DeclaringSyntaxReferences[0] inside Diagnostic.Create(...) before the null-conditional invoke, so the source generator will still throw IndexOutOfRangeException and emit CS8785 when a metadata member hits that branch.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "not_met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 985,
+              "line_end": 985,
+              "in_change": true
+            }
+          ],
+          "reason": "TypeCollector.cs line 985 still directly indexes item.DeclaringSyntaxReferences[0] before ReportIfLocatedInCompilation can filter the diagnostic, so MsgPack00xMessagePackAnalyzer will still throw IndexOutOfRangeException and emit AD0001 on that branch.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff does not include resolver generation code, and RunWithMetadataReferenceAsync only asserts the generated resolver hint name without inspecting the generated source to verify that the [MessagePackObject] type is included.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff does not show how closed generic value type members are emitted into the generated resolver, and the added tests do not check the generated resolver contents for a formatter entry for the member type.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 6363,
+      "completion_tokens": 829,
+      "seconds": 48.44695067405701,
+      "error": ""
+    },
+    {
+      "reviewer": "gemini-4-hydrogen",
+      "variant_id": "p04",
+      "findings": [],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "Whether the generated resolver includes the compiling assembly's [MessagePackObject] type (R3) and a formatter entry for the closed generic value type member (R4), because GenericsFormatterTests uses TestBehaviors.SkipGeneratedSourcesCheck and only checks the resolver hint name, and the resolver/formatter generation code is outside the diff.",
+        "Whether the third DeclaringSyntaxReferences[0] site in TypeCollector.GetObjectInfo mentioned in the issue (line 735 in v3.1.8) is already fixed or still crashes for other closed generic value types from referenced assemblies, because that section of TypeCollector.cs is not shown in the diff.",
+        "Whether CSharpSourceGeneratorVerifier<MessagePackGenerator> in VerifyCS.Test registers and executes MsgPack00xMessagePackAnalyzer, because the verifier implementation is not in the diff."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1077,
+              "line_end": 1077,
+              "in_change": true
+            },
+            {
+              "file": "tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs",
+              "line_start": 558,
+              "line_end": 580,
+              "in_change": true
+            },
+            {
+              "file": "tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs",
+              "line_start": 653,
+              "line_end": 658,
+              "in_change": true
+            }
+          ],
+          "reason": "TypeCollector replaces direct DeclaringSyntaxReferences[0] indexing on MemberNeedsKey with FirstOrDefault() and the new ClosedGenericRecordStruct_FromMetadataReference test verifies MessagePackGenerator completes on the repro without warnings or CS8785.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 239,
+              "line_end": 239,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 985,
+              "line_end": 985,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1077,
+              "line_end": 1077,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1444,
+              "line_end": 1450,
+              "in_change": true
+            },
+            {
+              "file": "tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs",
+              "line_start": 638,
+              "line_end": 648,
+              "in_change": true
+            }
+          ],
+          "reason": "TypeCollector guards MsgPack00xMessagePackAnalyzer diagnostic paths against empty DeclaringSyntaxReferences using FirstOrDefault() and filters out metadata diagnostics via ReportIfLocatedInCompilation, with tests verifying clean analyzer/generator execution.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The test only asserts that the resolver hint name (App.AppResolver.g.cs) is emitted and skips generated source checks, and resolver generation code is not in the diff, so it cannot be verified that the generated resolver includes the [MessagePackObject] type.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Neither CollectGeneric/resolver formatter registration code nor any assertion inspecting the generated resolver's formatter entries is present in the diff.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 6360,
+      "completion_tokens": 970,
+      "seconds": 95.5979073047638,
+      "error": ""
+    },
+    {
+      "reviewer": "gemini-4-hydrogen",
+      "variant_id": "p05",
+      "findings": [],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "Whether any remaining DeclaringSyntaxReferences[0] accesses exist in unseen parts of TypeCollector.cs (such as around line 735 cited in the issue) or in MsgPack00xMessagePackAnalyzer.cs, because those lines are not in the diff.",
+        "Whether VerifyCS.Test (CSharpSourceGeneratorVerifier<MessagePackGenerator>) actually runs MsgPack00xMessagePackAnalyzer, because the verifier helper implementation is not shown.",
+        "Whether the generated resolver includes the [MessagePackObject] type and a formatter entry for the closed generic value type member (e.g., Item<int>), because resolver generation code is not in the diff and GenericsFormatterTests only asserts the resolver hint name rather than generated source contents."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff fixes two DeclaringSyntaxReferences[0] accesses in TypeCollector.cs and adds generator tests, but lines 243-981 of TypeCollector.cs (including the third DeclaringSyntaxReferences[0] site around line 735 mentioned in the issue) are not shown and test execution results are not available.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Unseen portions of TypeCollector.cs, MsgPack00xMessagePackAnalyzer.cs, and CSharpSourceGeneratorVerifier prevent verifying that all analyzer crash paths are fixed and that VerifyCS.Test executes MsgPack00xMessagePackAnalyzer.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The new test only asserts that a generated source matching expectedResolverHintName exists and does not inspect its contents, and the resolver generation code is not in the diff.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff makes no changes to CollectGeneric or resolver generation and the new tests do not inspect the generated resolver source to verify whether a formatter entry for the closed generic value type member (e.g., Item<int>) is emitted.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 6355,
+      "completion_tokens": 554,
+      "seconds": 42.37958645820618,
+      "error": ""
+    },
+    {
+      "reviewer": "gemini-4-hydrogen",
+      "variant_id": "p06",
+      "findings": [],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "Whether any remaining DeclaringSyntaxReferences[0] indexing (such as the line 735 path cited in the issue) still exists in the unshown portion of TypeCollector.cs, because lines 243-981 are omitted from the diff.",
+        "Whether VerifyCS.Test in GenericsFormatterTests.cs executes MsgPack00xMessagePackAnalyzer in addition to MessagePackGenerator, because CSharpSourceGeneratorVerifier and MsgPack00xMessagePackAnalyzer.cs are not shown in the diff.",
+        "Whether the generated resolver includes the [MessagePackObject] type and a formatter entry for the closed generic value type member, because the test skips generated source content checks and the resolver generation/CollectGeneric code is not in the diff."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Lines 985 and 1077 in TypeCollector.cs fix two DeclaringSyntaxReferences[0] accesses and GenericsFormatterTests.cs adds generator tests for closed generic structs from metadata, but the third DeclaringSyntaxReferences[0] site around line 735 mentioned in the issue is outside the diff so other paths cannot be verified.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "TypeCollector.cs guards analyzer diagnostic reporting via ReportIfLocatedInCompilation, but MsgPack00xMessagePackAnalyzer.cs and CSharpSourceGeneratorVerifier are not in the diff, so we cannot tell whether VerifyCS.Test runs the analyzer or whether all analyzer paths avoid IndexOutOfRangeException.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "GenericsFormatterTests.cs only checks that the resolver hint name is generated while skipping generated source content checks, and the resolver emission code is not in the diff, so inclusion of the [MessagePackObject] type cannot be verified.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Neither the diff nor the tests inspect the generated resolver source or show CollectGeneric and resolver emission logic, so it cannot be verified whether the generated resolver contains a formatter entry for the closed generic value type member.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 6357,
+      "completion_tokens": 501,
+      "seconds": 73.82936930656433,
+      "error": ""
+    },
+    {
+      "reviewer": "gemini-4-hydrogen",
+      "variant_id": "p07",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 239,
+          "line_end": 245,
+          "message": "The reportDiagnostic wrapper only checks diagnostic.Location.IsInSource instead of calling ReportIfLocatedInCompilation (lines 1450-1456), leaving ReportIfLocatedInCompilation unused. When a referenced project is supplied as a CompilationReference (such as in IDE project-to-project references), diagnostic.Location.IsInSource is true for syntax trees belonging to the referenced compilation, so reportAnalyzerDiagnostic will still be invoked with a location outside this.compilation, causing Roslyn to throw an ArgumentException (AD0001).",
+          "severity": "major"
+        }
+      ],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "Whether MsgPack00xMessagePackAnalyzer runs in VerifyCS.Test and completes without AD0001, because MsgPack00xMessagePackAnalyzer.cs and CSharpSourceGeneratorVerifier are outside the diff.",
+        "Whether the generated resolver includes the [MessagePackObject] type and a formatter entry for the closed generic value type member (e.g., Item<int>), because the resolver generation code is not in the diff and GenericsFormatterTests.cs skips checking generated source contents (SkipGeneratedSourcesCheck) and only asserts HintName presence."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 990,
+              "line_end": 992,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1081,
+              "line_end": 1086,
+              "in_change": true
+            },
+            {
+              "file": "tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs",
+              "line_start": 653,
+              "line_end": 656,
+              "in_change": true
+            }
+          ],
+          "reason": "TypeCollector replaces DeclaringSyntaxReferences[0] indexing with FirstOrDefault() in the metadata-triggered diagnostic paths and the new tests run MessagePackGenerator with a closed generic struct/record struct from a metadata reference without warnings or errors.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Although TypeCollector filters non-source diagnostics and fixes DeclaringSyntaxReferences[0], neither MsgPack00xMessagePackAnalyzer.cs nor CSharpSourceGeneratorVerifier is shown in the diff to verify that VerifyCS.Test actually invokes MsgPack00xMessagePackAnalyzer or that the analyzer has no other failure paths.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The test sets TestBehaviors.SkipGeneratedSourcesCheck and only asserts that the resolver hint name is present without checking its generated source, and the resolver emission code is not in the diff, so it cannot be verified that the generated resolver includes the [MessagePackObject] type.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Neither the formatter/resolver generation code nor any test assertion inspects the generated resolver contents to confirm a formatter entry is emitted for the closed generic value type member.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 6405,
+      "completion_tokens": 852,
+      "seconds": 67.42385411262512,
+      "error": ""
+    },
+    {
+      "reviewer": "gemini-4-hydrogen",
+      "variant_id": "p08",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 239,
+          "line_end": 239,
+          "message": "`reportAnalyzerDiagnostic` is typed as nullable `Action<Diagnostic>?` and callers rely on `this.reportDiagnostic?.Invoke(...)` to skip reporting when it is null (e.g., during source generation). Wrapping it unconditionally in `diagnostic => ReportIfLocatedInCompilation(reportAnalyzerDiagnostic!, diagnostic)` makes `this.reportDiagnostic` always non-null; if `reportAnalyzerDiagnostic` is `null` and a diagnostic has a location in the current compilation, `ReportIfLocatedInCompilation` (line 1448) invokes `report(diagnostic)` on `null` and throws `NullReferenceException`.",
+          "severity": "critical"
+        },
+        {
+          "file": "tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs",
+          "line_start": 641,
+          "line_end": 658,
+          "message": "`RunWithMetadataReferenceAsync` sets `TestBehaviors.SkipGeneratedSourcesCheck` and only checks `Assert.Contains(expectedResolverHintName, hintNames)`, so the tests never verify that the generated resolver actually includes the `[MessagePackObject]` type or a formatter entry for the closed generic value type member.",
+          "severity": "minor"
+        }
+      ],
+      "meets_requirement": null,
+      "refused_to_decide": [
+        "Whether `TypeCollector.cs` retains any other unfixed `DeclaringSyntaxReferences[0]` indexing paths (such as line 735 mentioned in the issue description), because lines 243-981 of `TypeCollector.cs` are not in the diff.",
+        "Whether `VerifyCS.Test` in `GenericsFormatterTests.cs` runs `MsgPack00xMessagePackAnalyzer` (R2), because `CSharpSourceGeneratorVerifier<T>` and `MsgPack00xMessagePackAnalyzer` are not shown in the diff.",
+        "Whether the generated resolver includes the `[MessagePackObject]` type (R3) and a formatter entry for the closed generic value type member (R4), because `TestBehaviors.SkipGeneratedSourcesCheck` is set, only the resolver hint name is asserted, and the resolver generation code is not in the diff."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 985,
+              "line_end": 985,
+              "in_change": true
+            },
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1077,
+              "line_end": 1077,
+              "in_change": true
+            },
+            {
+              "file": "tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs",
+              "line_start": 652,
+              "line_end": 656,
+              "in_change": true
+            }
+          ],
+          "reason": "`TypeCollector` replaces direct `DeclaringSyntaxReferences[0]` indexing with null-safe location helpers and `GenericsFormatterTests` runs `MessagePackGenerator` on the metadata-reference cases with no diagnostics at warning severity or higher.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Although `TypeCollector` fixes `DeclaringSyntaxReferences[0]` and drops out-of-compilation diagnostics, neither `MsgPack00xMessagePackAnalyzer` nor `CSharpSourceGeneratorVerifier` is shown in the diff, so it cannot be verified that `VerifyCS.Test` executes `MsgPack00xMessagePackAnalyzer`.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The test only asserts that a generated source matching `expectedResolverHintName` exists while skipping generated source checks, and the resolver emitter is not shown in the diff, so the inclusion of the `[MessagePackObject]` type in the resolver cannot be verified.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "Neither the generated resolver contents nor the formatter/resolver generation logic is shown in the diff, so whether the resolver contains a formatter entry for the closed generic value type member cannot be verified.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 6347,
+      "completion_tokens": 1076,
+      "seconds": 56.25544786453247,
+      "error": ""
+    },
+    {
+      "reviewer": "gemini-4-hydrogen",
+      "variant_id": "p09",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 985,
+          "line_end": 985,
+          "message": "Uses item.DeclaringSyntaxReferences.First() instead of FirstOrDefault() (or the newly added GetPropertyIdentifierLocation helper at line 1434, which is left unused). For a property on a closed generic value type from a referenced assembly, DeclaringSyntaxReferences is empty, so .First() throws InvalidOperationException and causes both the generator (CS8785, omitting the resolver) and analyzer (AD0001) to fail. For source properties, GetSyntax().GetLocation() also widens the diagnostic location from the identifier to the full property declaration.",
+          "severity": "major"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [
+        "Whether other DeclaringSyntaxReferences[0] sites mentioned in the issue (such as around line 735 of the original TypeCollector.cs) remain unsafe for closed generic value types from metadata references, because those lines are outside the shown diff.",
+        "Whether the generated resolver actually registers the [MessagePackObject] type and includes a formatter entry for the closed generic value type member (R3 and R4), because the resolver emission code is not in the diff and the added tests use SkipGeneratedSourcesCheck and only assert on the hint name."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "not_met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 985,
+              "line_end": 985,
+              "in_change": true
+            }
+          ],
+          "reason": "Line 985 calls item.DeclaringSyntaxReferences.First(), which still crashes the source generator with InvalidOperationException (emitting CS8785) if the referenced closed generic value type has a property hitting the BothStringAndIntKeyAreNull branch, and unshown parts of TypeCollector.cs cannot be verified.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "not_met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 985,
+              "line_end": 985,
+              "in_change": true
+            }
+          ],
+          "reason": "Line 985 calls item.DeclaringSyntaxReferences.First(), which still crashes MsgPack00xMessagePackAnalyzer with InvalidOperationException (emitting AD0001) if the referenced closed generic value type has a property hitting the BothStringAndIntKeyAreNull branch, and unshown parts of TypeCollector.cs cannot be verified.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff does not show the resolver generation logic, and the new test at GenericsFormatterTests.cs lines 641 and 657-658 only checks that the resolver hint name exists without inspecting its generated contents.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff does not show CollectGeneric, GetObjectInfo, or the resolver emitter, and the new test only checks the generated resolver hint name rather than verifying that a formatter entry for the closed generic value type member is emitted.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 6363,
+      "completion_tokens": 839,
+      "seconds": 47.078076124191284,
+      "error": ""
+    },
+    {
+      "reviewer": "gemini-4-hydrogen",
+      "variant_id": "p10",
+      "findings": [
+        {
+          "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+          "line_start": 1075,
+          "line_end": 1077,
+          "message": "`item.DeclaringSyntaxReferences.FirstOrDefault()!.GetSyntax().GetLocation()` uses the null-forgiving operator (`!`) instead of null-conditional access (`?.`). When a closed generic value type from a referenced assembly has a member without `[Key]` or `[IgnoreMember]` (such as in `ClosedGenericStruct_FromMetadataReference_UnkeyedMember`), `DeclaringSyntaxReferences` is empty, `FirstOrDefault()` returns `null`, and `.GetSyntax()` throws `NullReferenceException` before `this.reportDiagnostic` is even checked\u2014crashing both `MessagePackGenerator` (CS8785) and `MsgPack00xMessagePackAnalyzer` (AD0001).",
+          "severity": "critical"
+        },
+        {
+          "file": "tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs",
+          "line_start": 657,
+          "line_end": 658,
+          "message": "`RunWithMetadataReferenceAsync` only checks that `expectedResolverHintName` is present in `hintNames` and does not verify that the generated resolver actually includes the `[MessagePackObject]` type or a formatter entry for the closed generic value type member.",
+          "severity": "minor"
+        }
+      ],
+      "meets_requirement": false,
+      "refused_to_decide": [
+        "Whether the other `DeclaringSyntaxReferences[0]` diagnostic site around line 735 of `TypeCollector.cs` mentioned in the issue description is reachable or safe for metadata closed generic structs, because that region of `TypeCollector.cs` is not shown in the diff.",
+        "Whether the generated resolver includes the `[MessagePackObject]` type (R3) and a formatter entry for the closed generic value type member (R4), because neither the resolver emission code nor the generated resolver contents are shown in the diff."
+      ],
+      "points": [
+        {
+          "id": "R1",
+          "status": "not_met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1075,
+              "line_end": 1077,
+              "in_change": true
+            }
+          ],
+          "reason": "When the referenced closed generic value type has an unkeyed member, `item.DeclaringSyntaxReferences.FirstOrDefault()!.GetSyntax()` throws `NullReferenceException` during source generation and still causes CS8785.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R2",
+          "status": "not_met",
+          "evidence": [
+            {
+              "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+              "line_start": 1075,
+              "line_end": 1077,
+              "in_change": true
+            }
+          ],
+          "reason": "When the referenced closed generic value type has an unkeyed member, `item.DeclaringSyntaxReferences.FirstOrDefault()!.GetSyntax()` throws `NullReferenceException` in `MsgPack00xMessagePackAnalyzer` and still causes AD0001.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R3",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff does not show the resolver generation code and `RunWithMetadataReferenceAsync` only checks the generated file's hint name, not whether the `[MessagePackObject]` type is included in the resolver.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        },
+        {
+          "id": "R4",
+          "status": "cannot_tell",
+          "evidence": [],
+          "reason": "The diff does not show `CollectGeneric` or resolver emission logic, and the test does not inspect the generated resolver source to confirm a formatter entry for the closed generic value type member.",
+          "dropped_evidence": 0,
+          "broad_evidence": 0
+        }
+      ],
+      "prompt_tokens": 6355,
+      "completion_tokens": 939,
+      "seconds": 32.57587480545044,
+      "error": ""
+    }
+  ],
+  "outcomes": [
+    {
+      "plant_id": "p01",
+      "kind": "bug",
+      "reviewer": "gemini-4-hydrogen",
+      "flagged": false,
+      "correct": false,
+      "inconclusive": false,
+      "point_id": "R2",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p02",
+      "kind": "bug",
+      "reviewer": "gemini-4-hydrogen",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": false,
+      "point_id": "R1",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p03",
+      "kind": "bug",
+      "reviewer": "gemini-4-hydrogen",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": false,
+      "point_id": "R2",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p04",
+      "kind": "harmless",
+      "reviewer": "gemini-4-hydrogen",
+      "flagged": false,
+      "correct": true,
+      "inconclusive": false,
+      "point_id": null,
+      "point_noticed": null,
+      "point_link": null
+    },
+    {
+      "plant_id": "p05",
+      "kind": "harmless",
+      "reviewer": "gemini-4-hydrogen",
+      "flagged": false,
+      "correct": true,
+      "inconclusive": false,
+      "point_id": null,
+      "point_noticed": null,
+      "point_link": null
+    },
+    {
+      "plant_id": "p06",
+      "kind": "harmless",
+      "reviewer": "gemini-4-hydrogen",
+      "flagged": false,
+      "correct": true,
+      "inconclusive": false,
+      "point_id": null,
+      "point_noticed": null,
+      "point_link": null
+    },
+    {
+      "plant_id": "p07",
+      "kind": "bug",
+      "reviewer": "gemini-4-hydrogen",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": false,
+      "point_id": "R2",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p08",
+      "kind": "omission",
+      "reviewer": "gemini-4-hydrogen",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": false,
+      "point_id": "R1",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p09",
+      "kind": "omission",
+      "reviewer": "gemini-4-hydrogen",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": false,
+      "point_id": "R2",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    },
+    {
+      "plant_id": "p10",
+      "kind": "omission",
+      "reviewer": "gemini-4-hydrogen",
+      "flagged": true,
+      "correct": true,
+      "inconclusive": false,
+      "point_id": "R1",
+      "point_noticed": null,
+      "point_link": "unconfirmed"
+    }
+  ],
+  "repeat_review": {
+    "reviewer": "gemini-4-hydrogen",
+    "variant_id": "repeat",
+    "findings": [],
+    "meets_requirement": null,
+    "refused_to_decide": [
+      "Whether the generated resolver actually includes the [MessagePackObject] type (R3) and a formatter entry for the closed generic value type member (R4), because resolver generation code is not in the diff and GenericsFormatterTests uses TestBehaviors.SkipGeneratedSourcesCheck and only asserts the generated hint name.",
+      "Whether the third DeclaringSyntaxReferences[0] site mentioned in the issue description (around line 735 in TypeCollector.cs) still exists or can be triggered by other closed generic value types from referenced assemblies, because lines 243-981 of TypeCollector.cs are not shown in the diff and the tests were not executed."
+    ],
+    "points": [
+      {
+        "id": "R1",
+        "status": "met",
+        "evidence": [
+          {
+            "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+            "line_start": 983,
+            "line_end": 986,
+            "in_change": true
+          },
+          {
+            "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+            "line_start": 1075,
+            "line_end": 1077,
+            "in_change": true
+          },
+          {
+            "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+            "line_start": 1429,
+            "line_end": 1434,
+            "in_change": true
+          },
+          {
+            "file": "tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs",
+            "line_start": 651,
+            "line_end": 658,
+            "in_change": true
+          }
+        ],
+        "reason": "The change replaces direct DeclaringSyntaxReferences[0] indexing in TypeCollector with null-safe location helpers and adds generator tests verifying no CS8785 or warning-level diagnostics are emitted for closed generic structs and record structs from metadata.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R2",
+        "status": "met",
+        "evidence": [
+          {
+            "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+            "line_start": 238,
+            "line_end": 240,
+            "in_change": true
+          },
+          {
+            "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+            "line_start": 983,
+            "line_end": 986,
+            "in_change": true
+          },
+          {
+            "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+            "line_start": 1075,
+            "line_end": 1080,
+            "in_change": true
+          },
+          {
+            "file": "src/MessagePack.SourceGenerator/CodeAnalysis/TypeCollector.cs",
+            "line_start": 1444,
+            "line_end": 1450,
+            "in_change": true
+          },
+          {
+            "file": "tests/MessagePack.SourceGenerator.Tests/GenericsFormatterTests.cs",
+            "line_start": 638,
+            "line_end": 648,
+            "in_change": true
+          }
+        ],
+        "reason": "TypeCollector safely obtains null locations for metadata members, filters out diagnostics not located in the analyzed compilation via ReportIfLocatedInCompilation, and is verified by analyzer tests against metadata references.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R3",
+        "status": "cannot_tell",
+        "evidence": [],
+        "reason": "The added test asserts only that the resolver hint name is generated while skipping generated-source verification, and no resolver-emission code is shown in the diff to confirm the [MessagePackObject] type is included in the resolver.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      },
+      {
+        "id": "R4",
+        "status": "cannot_tell",
+        "evidence": [],
+        "reason": "Neither the diff in TypeCollector nor the assertions in GenericsFormatterTests show the contents of the generated resolver or how closed generic value types from referenced assemblies are registered as formatter entries.",
+        "dropped_evidence": 0,
+        "broad_evidence": 0
+      }
+    ],
+    "prompt_tokens": 6355,
+    "completion_tokens": 972,
+    "seconds": 102.08557510375977,
+    "error": ""
+  },
+  "unstable_points": [
+    "R1",
+    "R2"
+  ],
+  "altered_requirement": "",
+  "altered_requirement_review": null,
+  "requirement_flip_changed_verdict": null,
+  "build_checked": false,
+  "prompt_tokens": 76172,
+  "completion_tokens": 9814,
+  "wall_seconds": 95.6038875579834,
+  "notes": [
+    "The reviewer answered differently on two identical reviews for R1, R2; those points are not scored.",
+    "Altered-requirement check skipped: the reviewer did not say the real change meets the requirement."
+  ]
+}

@@ -72,17 +72,17 @@ function pullInAddress(): number | null {
 function Brand({ onHome }: { onHome: () => void }) {
   const reduced = useReducedMotion() ?? false;
   return (
-    <button type="button" onClick={onHome} title="All pull requests" className="flex shrink-0 items-center gap-2 rounded-lg py-0.5 pl-1 pr-1.5 hover:bg-subtle">
+    <button type="button" onClick={onHome} title="All pull requests" className="flex shrink-0 items-center gap-2 rounded-lg py-0.5 pl-1 pr-1.5">
       <motion.img
         src="/seal.svg"
         alt=""
-        width={28}
-        height={28}
-        className="h-7 w-7 drop-shadow-[0_1px_1px_rgb(0_0_0/0.06)]"
+        width={32}
+        height={32}
+        className="h-8 w-8"
         whileHover={reduced ? undefined : { rotate: [0, -8, 7, -4, 0], scale: 1.08 }}
         transition={{ duration: 0.6 }}
       />
-      <span className="hidden text-[15.5px] font-semibold tracking-[-0.01em] sm:inline">Seal</span>
+      <span className="hidden font-display text-[21px] leading-none font-bold tracking-[-0.04em] sm:inline">seal</span>
     </button>
   );
 }
