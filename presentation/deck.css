@@ -1207,24 +1207,27 @@ em {
   opacity: 0;
   transition: all 0.8s var(--ease);
 }
+/* The blind-spot block around line 239. */
 .s-product.s1 .spot {
   opacity: 1;
-  left: 12.3%;
-  top: 63.8%;
-  width: 81%;
-  height: 21.3%;
+  left: 26.1%;
+  top: 28.6%;
+  width: 69.2%;
+  height: 49.9%;
 }
+/* The list of open steps that keeps Accept locked. */
 .s-product.s2 .spot {
-  left: 12.3%;
-  top: 28%;
-  width: 57%;
-  height: 33.6%;
+  left: 26.1%;
+  top: 34.5%;
+  width: 56%;
+  height: 24.7%;
 }
+/* Where the signer puts their name on a decision. */
 .s-product.s3 .spot {
-  left: 61.7%;
-  top: 0.7%;
-  width: 14.7%;
-  height: 3.9%;
+  left: 26.1%;
+  top: 61.8%;
+  width: 56%;
+  height: 22.1%;
 }
 
 /* ---------- 07 Evidence ---------- */
@@ -1301,6 +1304,12 @@ em {
 .legend i.hit {
   border-color: var(--acc);
   background: var(--acc);
+}
+/* A planted defect that could not be scored for this reviewer. */
+.dots i.skip,
+.legend i.skip {
+  border-style: dashed;
+  border-color: var(--faint);
 }
 .val {
   font-size: 22px;
@@ -1391,7 +1400,7 @@ em {
   transform-origin: calc((var(--pt) - var(--lo)) / (var(--hi) - var(--lo)) * 100%) 50%;
   transition: transform 1s var(--ease) 0.35s;
 }
-.nemo .range {
+.lead .range {
   background: var(--acc);
 }
 .p-range.on .range {
@@ -1571,6 +1580,16 @@ html.print .slide {
 html.print .slide:last-of-type {
   break-after: auto;
 }
+/* On screen the content box is laid out wider than the slide and scaled down with a transform.
+   Print layout counts that unscaled width as overflow and shrinks every page to fit it, which
+   leaves a white strip on the right and under the last slide. Zoom gives the same picture with
+   a box that really is the smaller size. */
+html.print .safe {
+  transform: none;
+  zoom: var(--s);
+  left: calc(104px / var(--s));
+  top: calc(var(--cut-top) * 1px / var(--s));
+}
 html.print .hud {
   display: none;
 }
@@ -1587,10 +1606,10 @@ html.print .s-product .shot.b {
   opacity: 0;
 }
 html.print .s-product .spot {
-  left: 12.3%;
-  top: 63.8%;
-  width: 81%;
-  height: 21.3%;
+  left: 26.1%;
+  top: 28.6%;
+  width: 69.2%;
+  height: 49.9%;
 }
 /* Nothing is dimmed on paper: every beat is readable. */
 html.print .s-problem .chain {

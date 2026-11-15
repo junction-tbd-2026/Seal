@@ -218,8 +218,8 @@
       <figure class="browser rise" style="--d:380">
         <div class="bar"><i></i><i></i><i></i><span>Reviewer Controls</span></div>
         <div class="screen">
-          <img class="shot a" src="img/product-objective.png" alt="The audit page for one requirement point: the cited code with the line the AI reviewer missed, and the question whether line 239 is correct.">
-          <img class="shot b" src="img/product-signoff.png" alt="The sign-off page: five steps are open, and Accept is locked until each one is finished.">
+          <img class="shot a" src="img/product-objective.png" alt="The audit page for one review objective: the code the AI reviewer cited, with line 239 marked as a blind spot, and the question whether line 239 is correct.">
+          <img class="shot b" src="img/product-signoff.png" alt="The sign-off page: four steps are open, and Accept is locked until each one is finished.">
           <i class="spot"></i>
         </div>
       </figure>
@@ -237,34 +237,34 @@
   <section class="slide light s-evidence">
     <div class="safe">
       <div class="kicker rise" style="--d:150">Evidence <i>/</i> Tieto's sample changes</div>
-      <h2 class="head rise" style="--d:230">Both said “meets the requirement”.<br>Only one noticed the breaks.</h2>
+      <h2 class="head rise" style="--d:230">Both said “meets the requirement”.<br>One caught 6 of 6 breaks, the other 2.</h2>
 
       <div class="panels">
         <section class="panel p-dots rise" style="--d:400">
-          <h3>Pull request #1 <span>the same 7 planted defects</span></h3>
-          <div class="row nemo">
+          <h3>Pull request #3 <span>the same 7 planted defects</span></h3>
+          <div class="row lead">
+            <div class="who">Gemini 4 Hydrogen<span class="chip line">meets requirement</span></div>
+            <div class="dots"><i class="hit"></i><i class="hit"></i><i class="hit"></i><i class="hit"></i><i class="hit"></i><i class="hit"></i><i class="skip"></i></div>
+            <div class="val"><b>6</b> of 6 caught</div>
+          </div>
+          <div class="row">
             <div class="who">Nemotron 3.5 Super VL<span class="chip line">meets requirement</span></div>
-            <div class="dots"><i class="hit"></i><i class="hit"></i><i class="hit"></i><i></i><i class="hit"></i><i class="hit"></i><i></i></div>
-            <div class="val"><b>5</b> of 7 caught</div>
+            <div class="dots"><i></i><i></i><i class="skip"></i><i></i><i class="hit"></i><i></i><i class="hit"></i></div>
+            <div class="val"><b>2</b> of 6 caught</div>
           </div>
-          <div class="row gemma">
-            <div class="who">Gemma 4 31B<span class="chip line">meets requirement</span></div>
-            <div class="dots"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="val"><b>0</b> of 7 caught</div>
-          </div>
-          <div class="legend"><i class="hit"></i>caught<i></i>missed</div>
+          <div class="legend"><i class="hit"></i>caught<i></i>missed<i class="skip"></i>not scored</div>
         </section>
 
         <section class="panel p-range frag" data-step="1">
           <h3>All changes tested so far <span>catch rate, 95% interval</span></h3>
-          <div class="chart" role="img" aria-label="Catch rate of planted defects with 95 percent interval. Nemotron 3.5 Super VL: 11 of 14 caught, between 52 and 92 percent. Gemma 4 31B: 1 of 13 caught, between 1 and 33 percent.">
-            <div class="rrow nemo">
-              <div class="rlabel"><span>Nemotron 3.5 Super VL</span><span class="rval"><b>11 of 14</b> 52% to 92%</span></div>
-              <div class="track"><i class="range" style="--lo:52;--hi:92;--pt:78.6"></i><i class="pt" style="--pt:78.6"></i></div>
+          <div class="chart" role="img" aria-label="Catch rate of planted defects with 95 percent interval. Gemini 4 Hydrogen: 17 of 20 caught, between 64 and 95 percent. Nemotron 3.5 Super VL: 6 of 13 caught, between 23 and 71 percent.">
+            <div class="rrow lead">
+              <div class="rlabel"><span>Gemini 4 Hydrogen</span><span class="rval"><b>17 of 20</b> 64% to 95%</span></div>
+              <div class="track"><i class="range" style="--lo:64;--hi:95;--pt:85"></i><i class="pt" style="--pt:85"></i></div>
             </div>
-            <div class="rrow gemma">
-              <div class="rlabel"><span>Gemma 4 31B</span><span class="rval"><b>1 of 13</b> 1% to 33%</span></div>
-              <div class="track"><i class="range" style="--lo:1;--hi:33;--pt:7.7"></i><i class="pt" style="--pt:7.7"></i></div>
+            <div class="rrow">
+              <div class="rlabel"><span>Nemotron 3.5 Super VL</span><span class="rval"><b>6 of 13</b> 23% to 71%</span></div>
+              <div class="track"><i class="range" style="--lo:23;--hi:71;--pt:46.2"></i><i class="pt" style="--pt:46.2"></i></div>
             </div>
             <div class="axis"><span style="--x:0">0%</span><span style="--x:50">50%</span><span style="--x:100">100%</span></div>
           </div>
@@ -272,11 +272,11 @@
         </section>
       </div>
 
-      <p class="caption rise" style="--d:650">Runs saved 14 November on 3 of the 4 sample changes. Both reviewers saw identical breaks, written by a third model. The breaks are not yet compiled and run, and counts are small, so we report ranges and never a single score.</p>
+      <p class="caption rise" style="--d:650">Runs saved 14 November on 3 of the 4 sample changes. Both reviewers saw identical breaks, written by a third model. A break is not scored when the reviewer gave no usable answer or had already flagged that spot in the real change. The breaks are not yet compiled and run, and counts are small, so we report ranges and never a single score.</p>
     </div>
     <aside class="notes" data-time="0:25">
-      Does this tell reviewers apart? Both models approved Tieto's first change. One caught five of the seven planted defects. The other caught none.
-      [click] Across the changes we have run so far: 11 of 14 against 1 of 13. We report ranges, because the samples are small.
+      Does this tell reviewers apart? Both models approved Tieto's third change. One caught all six planted defects we could score. The other caught two of six.
+      [click] Across the changes we have run so far: 17 of 20 against 6 of 13. We report ranges, because the samples are small.
     </aside>
   </section>
 
@@ -291,7 +291,7 @@
           <div class="viz v-gate">
             <div class="check">
               <span class="pulse"></span>
-              <div><b>Reviewer Controls</b><span>caught 5 of 7 planted defects</span><span class="todo">1 line needs a human: TypeCollector.cs:239</span></div>
+              <div><b>Reviewer Controls</b><span>caught 4 of 7 planted defects</span><span class="todo">1 line needs a human: TypeCollector.cs:239</span></div>
             </div>
           </div>
           <h3>A gate on every pull request</h3>
@@ -300,9 +300,9 @@
 
         <article class="col rise" style="--d:560">
           <div class="viz v-record">
-            <div class="rec"><span>Bugs caught</span><div class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></div><b>7 of 8</b></div>
-            <div class="rec"><span>Omissions caught</span><div class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></div><b>4 of 6</b></div>
-            <div class="rec"><span>False alarms</span><div class="pips"><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i></div><b>2 of 6</b></div>
+            <div class="rec"><span>Bugs caught</span><div class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i></div><b>3 of 7</b></div>
+            <div class="rec"><span>Omissions caught</span><div class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i></div><b>3 of 6</b></div>
+            <div class="rec"><span>False alarms</span><div class="pips"><i class="on"></i><i></i><i></i><i></i><i></i><i></i></div><b>1 of 6</b></div>
           </div>
           <h3>A record for every reviewer</h3>
           <p>Every planted edit is a labelled test. Rates build up per reviewer, code area and kind of defect.</p>
