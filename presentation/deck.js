@@ -24,7 +24,7 @@
     const foot = document.createElement("footer");
     foot.className = "foot";
     foot.innerHTML =
-      `<span class="wm"><svg><use href="#i-mark"/></svg>Reviewer Controls</span>` +
+      `<span class="wm"><img src="img/seal.svg" alt="">seal</span>` +
       `<span class="pg">${pad(i + 1)} / ${pad(slides.length)}</span>`;
     slide.querySelector(".safe").appendChild(foot);
   });

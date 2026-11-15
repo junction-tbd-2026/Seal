@@ -228,17 +228,20 @@ em {
   color: var(--mut);
 }
 
+/* The logo and the name "seal", set like the title slide's heading. */
 .wordmark {
   display: flex;
   align-items: center;
   gap: 14px;
-  font-size: 28px;
+  font-family: var(--sans);
+  font-size: 36px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  line-height: 1;
+  letter-spacing: -0.04em;
 }
-.wordmark svg {
-  width: 36px;
-  height: 36px;
+.wordmark img {
+  width: 48px;
+  height: 48px;
 }
 
 .chip {
@@ -285,11 +288,17 @@ em {
 .foot .wm {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
+  font-family: var(--sans);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--fg);
 }
-.foot svg {
-  width: 20px;
-  height: 20px;
+.foot .wm img {
+  width: 28px;
+  height: 28px;
 }
 .s-title .foot,
 .s-close .foot {
