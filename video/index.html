@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>seal · Two-minute video</title>
+<link rel="icon" type="image/svg+xml" href="../presentation/img/seal.svg">
+<link rel="stylesheet" href="video.css">
+</head>
+<body>
+
+<!-- Icons. The bundled fonts have no arrows or check marks. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M4.5 12.5l5 5 10-11" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-cross" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></symbol>
+  <symbol id="i-bang" viewBox="0 0 24 24"><path d="M12 5v9M12 18.5v.5" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><path d="M7 11V8a5 5 0 0 1 10 0v3M5.5 11h13v9h-13z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<!-- The video: 1920 by 1080, two minutes. Every scene starts at data-start (seconds).
+     Inside a scene, --at and --out are seconds from the start of that scene.
+     Each <aside class="vo"> is one spoken line; data-at is when it starts. See SCRIPT.md. -->
+<main class="stage" id="stage" data-total="120">
+
+  <!-- 1 · Hook · 0:00 to 0:12 -->
+  <section class="scene dark s-hook" id="s-hook" data-name="1 Hook" data-start="0">
+    <div class="kicker a rise" style="--at:.3s">Friday <i>/</i> 16:42</div>
+
+    <div class="chain">
+      <article class="node n1 a rise" style="--at:.7s">
+        <div class="tag">AI agent</div>
+        <div class="pr">
+          <b>Pull request #1</b>
+          <span>Fixes a crash in the code generator</span>
+          <span class="files">
+            <i class="a pop" style="--at:1.5s"></i><i class="a pop" style="--at:1.62s"></i><i class="a pop" style="--at:1.74s"></i><i class="a pop" style="--at:1.86s"></i>
+            <span class="a fade" style="--at:2s">4 files changed</span>
+          </span>
+        </div>
+      </article>
+      <i class="link l1" style="--at:3.2s"></i>
+      <article class="node n2 a rise" style="--at:3.6s">
+        <div class="tag">AI reviewer</div>
+        <p class="said"><span data-type data-at="5.5" data-cps="17">Looks good to me.</span><span class="a fade" style="--at:4.4s;--in-dur:.01s"><i class="caret"></i></span></p>
+      </article>
+      <i class="link l2" style="--at:7.3s"></i>
+      <article class="node n3 a rise" style="--at:7.7s">
+        <div class="tag">Accountable human</div>
+        <div class="signline"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-cross"/></svg><span class="a fade" style="--at:8.3s;--in-dur:.01s"><i class="caret"></i></span></div>
+        <span class="signer">Approved by</span>
+        <span class="flagwrap a pop" style="--at:8.6s"><span class="flag">Sign here</span></span>
+      </article>
+    </div>
+
+    <h2 class="punch">
+      <span class="mask" style="--at:9s"><span>Now it needs a signature. <em class="a fade" style="--at:10.5s;--in-dur:.5s">Yours.</em></span></span>
+    </h2>
+
+    <aside class="vo" data-at="0.5">Friday afternoon. An AI agent opens a pull request.</aside>
+    <aside class="vo" data-at="4">An AI reviewer reads it, and says: looks good to me.</aside>
+    <aside class="vo" data-at="8.9">Now it needs a signature. Yours.</aside>
+  </section>
+
+  <!-- 2 · Punch · 0:12 to 0:18 -->
+  <section class="scene light s-punch" id="s-punch" data-name="2 Problem" data-start="12">
+    <div class="stamp a" style="--at:.75s"><div class="stamp-in"><b>Looks good</b><small>AI reviewer <i>/</i> no evidence attached</small></div></div>
+    <h2 class="punch">
+      <span class="mask" style="--at:1.2s"><span>“Looks good” is an opinion.</span></span>
+      <span class="mask" style="--at:3s"><span>It gives you <em>nothing to sign.</em></span></span>
+    </h2>
+    <aside class="vo" data-at="0.8">But “looks good” is an opinion. It gives you nothing to sign.</aside>
+  </section>
+
+  <!-- 3 · Proof · 0:18 to 0:40.5 -->
+  <section class="scene dark s-proof" id="s-proof" data-name="3 Proof" data-start="18">
+    <div class="kicker a rise" style="--at:.3s">What we found <i>/</i> Tieto's sample pull request #1</div>
+    <h2 class="beats">
+      <span class="beat b0 a rise" style="--at:.5s">The AI reviewer cited one line as proof.</span>
+      <span class="beat b1 a rise" style="--at:8.9s">We broke that line.</span>
+      <span class="beat b2 a rise" style="--at:18.1s">It still said <em>“met”.</em></span>
+    </h2>
+
+    <div class="cardwrap a rise" style="--at:1.1s">
+      <i class="ghost g2"></i><i class="ghost g1"></i>
+      <div class="codecard">
+        <div class="code">
+          <div class="code-head">
+            <span class="file">CodeAnalysis/TypeCollector.cs</span>
+            <span class="copytag a fade" style="--at:9.1s">blind copy, planted break</span>
+          </div>
+          <div class="lines">
+            <div class="ln"><b>237</b><code>{</code></div>
+            <div class="ln"><b>238</b><code>    this.typeReferences = referenceSymbols;</code></div>
+            <div class="ln cited"><b>239</b><code>    this.reportDiagnostic = reportAnalyzerDiagnostic is null ? null : diagnostic =&gt;</code></div>
+            <div class="ln cited del"><b></b><code>        ReportIfLocatedInCompilation(reportAnalyzerDiagnostic, diagnostic);<i class="strike"></i></code></div>
+            <div class="ln add"><b></b><code>        reportAnalyzerDiagnostic(diagnostic);</code></div>
+            <div class="ln"><b>240</b><code>    this.options = options;</code></div>
+            <div class="ln"><b>241</b><code>    this.compilation = compilation;</code></div>
+          </div>
+        </div>
+        <aside class="verdicts">
+          <div class="v-label a fade" style="--at:2.4s">AI reviewer's verdict</div>
+          <p class="v-claim a fade" style="--at:2.6s">Requirement point 2:<br>the analyzer no longer crashes.</p>
+          <div class="v-row r1 a rise" style="--at:3.6s">
+            <span class="v-when">On the real change</span>
+            <span class="chip"><svg><use href="#i-check"/></svg>met</span>
+            <span class="v-note">its proof: line 239</span>
+          </div>
+          <div class="v-row r2 a fade" style="--at:13.6s">
+            <span class="v-when">With line 239 broken</span>
+            <span class="slot">
+              <span class="think a fade" style="--at:13.9s;--out:17.6s;--ex-dur:.2s"><i></i><i></i><i></i></span>
+              <span class="chip hot a" style="--at:17.9s;--in:stamp-in;--in-dur:.55s"><svg><use href="#i-check"/></svg>met</span>
+            </span>
+            <span class="v-note a fade" style="--at:18.5s">it did not notice</span>
+          </div>
+        </aside>
+      </div>
+    </div>
+    <p class="caption a rise" style="--at:2s">Real run on MessagePack-CSharp. Reviewer: Nemotron 3.5 Super VL, in a fresh session, not told it was a test.</p>
+
+    <aside class="vo" data-at="0.5">We tried it on Tieto's own sample. The reviewer said the crash was fixed, and cited this line as proof.</aside>
+    <aside class="vo" data-at="8.8">So we made a copy, and broke exactly that line.</aside>
+    <aside class="vo" data-at="13.4">Same reviewer. Fresh session. No idea it is a test.</aside>
+    <aside class="vo" data-at="17.7">It still said: met.</aside>
+  </section>
+
+  <!-- 4 · Answer · 0:40.5 to 0:48 -->
+  <section class="scene blue s-answer" id="s-answer" data-name="4 Answer" data-start="40.5" data-wipe="circle">
+    <div class="brand">
+      <span class="logo a" style="--at:.45s;--in:stamp-in;--in-dur:.7s;--r0:-24deg"><img src="../presentation/img/seal.svg" alt=""></span>
+      <span class="name a rise" style="--at:.95s">seal</span>
+    </div>
+    <h1 class="mega">
+      <span class="mask" style="--at:1.4s"><span>Test the reviewer.</span></span>
+      <span class="mask" style="--at:1.65s"><span>Then <span class="signed">sign.<svg class="scribble" viewBox="0 0 300 40" aria-hidden="true"><path pathLength="1" d="M4 24 C 58 6, 104 36, 158 19 S 246 8, 296 21" style="--at:2.7s"/></svg></span></span></span>
+    </h1>
+    <p class="lede a rise" style="--at:3.4s">An approval nobody tested is a rubber stamp.</p>
+
+    <aside class="vo" data-at="0.6">An approval nobody tested is a rubber stamp.</aside>
+    <aside class="vo" data-at="4.3">So seal tests the reviewer first.</aside>
+  </section>
+
+  <!-- 5 · How it works · 0:48 to 1:09 -->
+  <section class="scene light s-how" id="s-how" data-name="5 How" data-start="48">
+    <div class="kicker a rise" style="--at:.3s">How it works</div>
+    <div class="bug a fade" style="--at:.6s"><img src="../presentation/img/seal.svg" alt="">seal</div>
+    <h2 class="trio"><span class="w" style="--at:.4s">Cite.</span> <span class="w" style="--at:7.9s">Break.</span> <span class="w" style="--at:13.5s">Re-review.</span></h2>
+
+    <div class="phase">
+      <p class="a rise" style="--at:1.2s;--out:7.4s">For every point of the requirement, the reviewer must cite its proof.</p>
+      <p class="a rise" style="--at:8.1s;--out:13.2s">A different model breaks exactly those lines. One break per copy.</p>
+      <p class="a rise" style="--at:13.7s;--out:17.6s">The reviewer judges every copy, blind.</p>
+      <p class="a rise" style="--at:18.1s">Where it missed, <em>a human must look.</em></p>
+    </div>
+
+    <!-- Cite: the requirement, split into points; each point wired to the lines that prove it. -->
+    <div class="cite a fade" style="--at:.5s;--out:7.4s;--in-dur:.01s">
+      <div class="req a rise" style="--at:.8s">
+        <div class="tag">Requirement</div>
+        <b>Issue #2283</b>
+        <span>Crash on a closed generic struct from a referenced assembly</span>
+      </div>
+      <svg class="wires" viewBox="0 0 1920 1080" aria-hidden="true">
+        <path class="split" pathLength="1" style="--at:1.5s" d="M510 470 C 560 470, 550 392, 600 392"/>
+        <path class="split" pathLength="1" style="--at:1.62s" d="M510 470 C 560 470, 550 504, 600 504"/>
+        <path class="split" pathLength="1" style="--at:1.74s" d="M510 470 C 560 470, 550 616, 600 616"/>
+        <path class="split" pathLength="1" style="--at:1.86s" d="M510 470 C 560 470, 550 728, 600 728"/>
+        <path class="wire" pathLength="1" style="--at:2.8s" d="M900 392 C 1040 392, 1040 449, 1180 449"/>
+        <path class="wire" pathLength="1" style="--at:3.3s" d="M900 504 C 1040 504, 1040 579, 1180 579"/>
+        <path class="wire" pathLength="1" style="--at:3.8s" d="M900 616 C 1040 616, 1040 735, 1180 735"/>
+        <path class="wire none" style="--at:4.4s" d="M900 728 C 960 728, 960 800, 1010 800"/>
+      </svg>
+      <div class="pill a pop" style="--at:1.7s;top:350px"><b>O1</b><i></i><i></i></div>
+      <div class="pill a pop" style="--at:1.82s;top:462px"><b>O2</b><i></i><i></i></div>
+      <div class="pill a pop" style="--at:1.94s;top:574px"><b>O3</b><i></i><i></i></div>
+      <div class="pill a pop" style="--at:2.06s;top:686px"><b>O4</b><i></i><i></i></div>
+      <span class="refused a pop" style="--at:4.8s">cannot tell</span>
+      <div class="doc big a rise" style="--at:1.1s">
+        <span class="file">TypeCollector.cs</span>
+        <i></i><i></i><i class="c" style="--at:3.2s"></i><i class="c" style="--at:3.3s"></i><i></i><i></i><i></i><i class="c" style="--at:3.7s"></i><i></i><i></i><i></i><i></i><i class="c" style="--at:4.2s"></i><i class="c" style="--at:4.3s"></i><i></i><i></i>
+      </div>
+      <span class="lineno a fade" style="--at:4s">line 239</span>
+    </div>
+
+    <!-- Break and re-review: ten copies of the change, one planted edit in each. Outcomes are the real
+         run on pull request #1 with Nemotron: 4 of 7 defects caught, 1 false alarm on 3 harmless edits. -->
+    <div class="copies a fade" style="--at:7.6s;--in-dur:.01s">
+      <span class="group a fade" style="--at:8.6s;left:174px;width:612px">4 bugs</span>
+      <span class="group a fade" style="--at:8.8s;left:814px;width:452px">3 omissions</span>
+      <span class="group a fade" style="--at:9s;left:1294px;width:452px">3 harmless rewrites</span>
+
+      <figure class="copy miss" style="--i:0"><div class="doc mini"><i></i><i></i><i class="x"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-cross"/></svg></span><figcaption>missed</figcaption></figure>
+      <figure class="copy ok" style="--i:1"><div class="doc mini"><i></i><i></i><i class="x"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-check"/></svg></span><figcaption>caught</figcaption></figure>
+      <figure class="copy ok" style="--i:2"><div class="doc mini"><i></i><i></i><i class="x"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-check"/></svg></span><figcaption>caught</figcaption></figure>
+      <figure class="copy miss" style="--i:3"><div class="doc mini"><i></i><i></i><i class="x"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-cross"/></svg></span><figcaption>missed</figcaption></figure>
+      <figure class="copy miss" style="--i:4"><div class="doc mini"><i></i><i></i><i class="x gone"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-cross"/></svg></span><figcaption>missed</figcaption></figure>
+      <figure class="copy ok" style="--i:5"><div class="doc mini"><i></i><i></i><i class="x gone"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-check"/></svg></span><figcaption>caught</figcaption></figure>
+      <figure class="copy ok" style="--i:6"><div class="doc mini"><i></i><i></i><i class="x gone"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-check"/></svg></span><figcaption>caught</figcaption></figure>
+      <figure class="copy ok" style="--i:7"><div class="doc mini"><i></i><i></i><i class="x soft"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-check"/></svg></span><figcaption>left alone</figcaption></figure>
+      <figure class="copy alarm" style="--i:8"><div class="doc mini"><i></i><i></i><i class="x soft"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-bang"/></svg></span><figcaption>false alarm</figcaption></figure>
+      <figure class="copy ok" style="--i:9"><div class="doc mini"><i></i><i></i><i class="x soft"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-check"/></svg></span><figcaption>left alone</figcaption></figure>
+
+      <i class="scan"></i>
+      <p class="score a rise" style="--at:16.1s;--out:17.8s">Caught <b>4 of 7</b> planted defects. One false alarm.</p>
+      <p class="outcome a rise" style="--at:18.4s"><svg><use href="#i-arrow"/></svg>Not a score. A to-do list: <span class="where">TypeCollector.cs <i>:</i> 239</span></p>
+    </div>
+
+    <aside class="vo" data-at="0.5">Seal splits the requirement into checkable points. For each one, the reviewer must cite the lines that prove it.</aside>
+    <aside class="vo" data-at="8.3">Then a different model breaks exactly those lines. One break per copy.</aside>
+    <aside class="vo" data-at="13.6">The reviewer judges every copy, blind.</aside>
+    <aside class="vo" data-at="16.2">Where it notices, its word counts. Where it misses, a human looks.</aside>
+  </section>
+
+  <!-- 6 · The product · 1:09 to 1:35. Built by scenes.js from the screenshots in shots/. -->
+  <section class="scene dark s-product" id="s-product" data-name="6 Product" data-start="69">
+    <div class="cam">
+      <figure class="browser">
+        <div class="bar"><i></i><i></i><i></i><span>seal</span></div>
+        <div class="screen" id="screen"></div>
+      </figure>
+    </div>
+    <div class="lt a rise" style="--at:3.3s;--out:9.2s">Straight to the blind spot: <em>line 239</em></div>
+    <div class="lt a rise" style="--at:10s;--out:13.1s"><svg><use href="#i-lock"/></svg>Accept stays locked until you have judged it</div>
+    <div class="lt a rise" style="--at:13.6s;--out:19s">Then you sign. <em>With your name.</em></div>
+    <div class="lt a rise" style="--at:19.8s">And the signer is <em>tested too</em></div>
+
+    <aside class="vo" data-at="0.8">You do not read the whole diff. You land on the line where the reviewer proved blind, and judge it yourself.</aside>
+    <aside class="vo" data-at="9.9">Accept stays locked until every marked spot has your verdict.</aside>
+    <aside class="vo" data-at="14.2">Then you sign. With your name.</aside>
+    <aside class="vo" data-at="19.3">People rubber-stamp too. So some sign-offs carry a planted bug. Approve it, and nothing is approved.</aside>
+  </section>
+
+  <!-- 7 · Evidence and track record · 1:35 to 1:50.5. Numbers are copied by hand from docs/results.md. -->
+  <section class="scene light s-evidence" id="s-evidence" data-name="7 Evidence" data-start="95">
+    <div class="kicker a rise" style="--at:.3s">Evidence <i>/</i> Tieto's sample changes</div>
+    <div class="bug a fade" style="--at:.6s"><img src="../presentation/img/seal.svg" alt="">seal</div>
+    <div class="heads">
+      <h2 class="head a" style="--at:0s;--out:8s;--in-dur:.01s">
+        <span class="mask" style="--at:.4s"><span>Both said “meets the requirement”.</span></span>
+        <span class="mask" style="--at:4.7s"><span>One caught <em>6 of 6</em> breaks. The other, 2.</span></span>
+      </h2>
+      <h2 class="head">
+        <span class="mask" style="--at:8.5s"><span>Trust becomes a <em>track record.</em></span></span>
+        <span class="mask" style="--at:11.7s"><span>Review depth follows risk.</span></span>
+      </h2>
+    </div>
+
+    <div class="panels">
+      <div class="lead-in"><section class="panel p-dots a rise" style="--at:1s">
+        <h3>Pull request #3 <span>the same 7 planted breaks</span></h3>
+        <div class="row lead">
+          <div class="who">Gemini 4 Hydrogen<span class="chip line">meets requirement</span></div>
+          <div class="dots" style="--t0:2.2s"><i class="hit"></i><i class="hit"></i><i class="hit"></i><i class="hit"></i><i class="hit"></i><i class="hit"></i><i class="skip"></i></div>
+          <div class="val"><b data-count="6" data-at="3.1" data-dur="1">0</b> of 6 caught</div>
+        </div>
+        <div class="row">
+          <div class="who">Nemotron 3.5 Super VL<span class="chip line">meets requirement</span></div>
+          <div class="dots" style="--t0:2.6s"><i></i><i></i><i class="skip"></i><i></i><i class="hit"></i><i></i><i class="hit"></i></div>
+          <div class="val"><b data-count="2" data-at="3.5" data-dur="1">0</b> of 6 caught</div>
+        </div>
+        <div class="legend"><i class="hit"></i>caught<i></i>missed<i class="skip"></i>not scored</div>
+      </section></div>
+
+      <section class="panel p-range a rise" style="--at:8.7s">
+        <h3>All changes tested so far <span>catch rate, 95% interval</span></h3>
+        <div class="chart">
+          <div class="rrow lead">
+            <div class="rlabel"><span>Gemini 4 Hydrogen</span><span class="rval"><b>17 of 20</b> 64% to 95%</span></div>
+            <div class="track"><i class="range" style="--lo:64;--hi:95;--pt:85;--at:9.4s"></i><i class="pt" style="--pt:85"></i></div>
+          </div>
+          <div class="rrow">
+            <div class="rlabel"><span>Nemotron 3.5 Super VL</span><span class="rval"><b>6 of 13</b> 23% to 71%</span></div>
+            <div class="track"><i class="range" style="--lo:23;--hi:71;--pt:46.2;--at:9.7s"></i><i class="pt" style="--pt:46.2"></i></div>
+          </div>
+          <div class="axis"><span style="--x:0">0%</span><span style="--x:50">50%</span><span style="--x:100">100%</span></div>
+        </div>
+        <div class="legend"><i class="lg-bar"></i>95% interval<i class="lg-tick"></i>share caught</div>
+      </section>
+    </div>
+
+    <div class="tiers">
+      <div class="tier a rise" style="--at:12s"><span>Low risk</span><i class="pips n5"></i><b>sign the card</b></div>
+      <div class="tier a rise" style="--at:12.3s"><span>Medium</span><i class="pips n10"></i><b>read marked lines</b></div>
+      <div class="tier a rise" style="--at:12.6s"><span>High risk</span><i class="pips n30"></i><b>full read</b></div>
+    </div>
+    <p class="caption a fade" style="--at:9.2s">Saved runs on 3 of Tieto's 4 sample changes. Both reviewers saw identical breaks, written by a third model. Counts are small, so we report ranges, never a single score.</p>
+
+    <aside class="vo" data-at="0.4">Does it tell reviewers apart? Both approved the same change. One caught six of six planted breaks. The other, two.</aside>
+    <aside class="vo" data-at="8.6">Every planted break is a labelled test. Trust becomes a track record, and review depth follows risk.</aside>
+  </section>
+
+  <!-- 8 · Close · 1:50.5 to 2:00 -->
+  <section class="scene dark s-close" id="s-close" data-name="8 Close" data-start="110.5">
+    <header class="top">
+      <div class="wordmark a rise" style="--at:.3s"><img src="../presentation/img/seal.svg" alt="">seal</div>
+      <div class="kicker a rise" style="--at:.4s">Junction 2026 <i>/</i> Tieto <i>/</i> Earned Trust in AI Code</div>
+    </header>
+    <ul class="recap">
+      <li class="a" style="--at:.6s;--in:slide-in"><svg><use href="#i-check"/></svg>Every claim cites its evidence.</li>
+      <li class="a" style="--at:2.3s;--in:slide-in"><svg><use href="#i-check"/></svg>Every AI reviewer is tested on the change in front of it.</li>
+      <li class="a" style="--at:3.8s;--in:slide-in"><svg><use href="#i-check"/></svg>Every human approval is tested too.</li>
+    </ul>
+    <h1 class="mega">
+      <span class="mask" style="--at:5.1s"><span>Test the reviewer.</span></span>
+      <span class="mask" style="--at:5.35s"><span>Then <span class="signed">sign.<svg class="scribble" viewBox="0 0 300 40" aria-hidden="true"><path pathLength="1" d="M4 24 C 58 6, 104 36, 158 19 S 246 8, 296 21" style="--at:6.3s"/></svg></span></span></span>
+    </h1>
+    <span class="seal a" style="--at:6.7s;--in:stamp-in;--in-dur:.7s;--r:-9deg;--r0:10deg"><img src="../presentation/img/seal.svg" alt=""></span>
+    <div class="team a rise" style="--at:7.1s">Niek Adams <i>/</i> Elin Lucia Dobrostal <i>/</i> Timo Gültzow <i>/</i> Stepan Konoplianko</div>
+    <div class="powered a rise" style="--at:7.3s">
+      <span>Powered by</span>
+      <img src="../presentation/img/logos/tieto.svg" alt="Tieto" style="--h:26px">
+      <img src="../presentation/img/logos/gemini.svg" alt="Google Gemini" style="--h:28px">
+      <img src="../presentation/img/logos/craci.svg" alt="CRACI" style="--h:22px">
+      <img src="../presentation/img/logos/aiven.svg" alt="Aiven" style="--h:30px">
+      <img src="../presentation/img/logos/nvidia.svg" alt="NVIDIA" style="--h:22px">
+    </div>
+
+    <aside class="vo" data-at="0.5">Every claim cites its evidence. Every reviewer is tested. Every signature, too.</aside>
+    <aside class="vo" data-at="5.5">Seal. Test the reviewer. Then sign.</aside>
+  </section>
+
+  <!-- Spoken lines as subtitles. Off by default; press C, or open with ?captions. -->
+  <p class="caption-bar" id="caption" hidden></p>
+</main>
+
+<div class="hud" id="hud"></div>
+
+<script src="shots/shots.js"></script>
+<script src="scenes.js"></script>
+<script src="player.js"></script>
+</body>
+</html>
