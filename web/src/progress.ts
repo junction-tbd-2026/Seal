@@ -179,7 +179,7 @@ function describePoint(point: PointView, spots: Plant[]): Pick<PointStep, "tone"
         verdict: "Failed",
         detail:
           point.broken_total > 0
-            ? `Noticed ${point.broken_noticed} of ${breaks(point.broken_total)} in the lines it cites.`
+            ? `Planted ${breaks(point.broken_total)} in the lines it cites. It missed ${point.broken_total - point.broken_noticed}.`
             : `Missed ${breaks(spots.length)} aimed at ${objective}.`,
       },
     };
@@ -222,7 +222,7 @@ function describePoint(point: PointView, spots: Plant[]): Pick<PointStep, "tone"
       claimsMet,
       test: {
         verdict: "Passed",
-        detail: `Noticed ${point.broken_total === 1 ? "the 1 planted mistake" : `all ${breaks(point.broken_total)}`} in the lines it cites.`,
+        detail: `Planted ${breaks(point.broken_total)} in the lines it cites. It missed none.`,
       },
     };
   }

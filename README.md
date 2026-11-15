@@ -60,22 +60,20 @@ A working prototype with two parts.
 
 **2. A web page where the accountable person signs.**
 
-- A landing page lists the pull requests in the middle of the screen. One
-  that is ready opens as an audit of its AI review, in steps: first how the
-  AI reviewer did on our test, then one step per review objective, then the
-  sign-off. (A review objective is one of the checkable points the
-  requirement, the issue, was split into.) A menu at the top switches
-  between pull requests during an audit.
-- The list has three parts. At the top, the pull requests the AI has
-  checked and a person can audit, and below them any whose AI check is
-  still running (a spinner; they cannot be opened yet). Then what needs
-  follow-up: one sent for a full human read links to GitHub, where a person
-  reads the whole change; a rejected one is back with the AI agent, greyed
-  with a spinner, and returns to the top by itself once a newer AI run is
-  saved for it. At the bottom, an archive of the accepted ones, with who
-  signed and when.
-- After the sign-off the page goes back to the list and the signed pull
-  request moves to its part. A signed pull request cannot be opened again.
+- A landing page shows the pull requests. One that is ready opens as an
+  audit of its AI review, in steps: first how the AI reviewer did on our
+  test, then one step per review objective, then the sign-off. (A review
+  objective is one of the checkable points the requirement, the issue, was
+  split into.) A menu at the top switches between pull requests during an
+  audit.
+- The landing page is a board with one column per step: "Pending" (a
+  first AI check, or a rejected change back with the AI agent to be fixed
+  and checked again), "Ready for your audit", "Full review required"
+  (sent for a full human read, with a link to read it on GitHub) and
+  "Accepted" (with who signed and when, newest first, older ones folded
+  away). Only the cards ready for an audit open.
+- After the sign-off the page goes back to the board and the signed pull
+  request moves to its column. A signed pull request cannot be opened again.
 - Each objective step states three things in the side bar: what the AI
   reviewer claims, how that claim did on our test, and what the person must
   do. The panel shows the change file by file: the lines the AI reviewer
@@ -151,9 +149,7 @@ More detail: [docs/concept-card.md](docs/concept-card.md) (the concept),
    and post its status back to it. Until then the page cannot tell a check
    that is running from one that never started: every pull request without
    results shows as "AI check running", and the list asks again every few
-   seconds so it opens once results arrive. A rejected pull request works
-   the same way: it reopens when a newer run is saved, but nothing starts
-   that run yet.
+   seconds so it opens once results arrive.
 4. **Keep a track record.** Pool results per reviewer, per code area and per
    kind of defect, so the amount of human review follows measured trust.
 5. **Submission.** Product name, two-minute video, public repository, and

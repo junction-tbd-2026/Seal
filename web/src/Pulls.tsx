@@ -1,6 +1,7 @@
 import { LayoutGroup, motion, useReducedMotion } from "motion/react";
-import { useEffect, useState, type ReactNode } from "react";
-import { ArrowRight, ArrowUpRight, CheckIcon, RepoIcon } from "./icons";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { ArrowRight, BotIcon, BranchIcon, CheckIcon, ClockIcon, GitHubMark, InfoIcon, RepoIcon } from "./icons";
 import { formatWhen, plural, prettyModel } from "./lib";
 import { readSaved, storageKey, type Progress } from "./progress";
 import type { Pull, PullList } from "./types";
@@ -24,8 +25,6 @@ export function stageOf(pull: Pull): Stage {
   return decision === "accept" ? "done" : decision === "reject" ? "rework" : "followup";
 }
 
-/** The AI is at work on these: they come back as "ready" by themselves, so the list keeps asking. */
-export const isWaitingOnAi = (pull: Pull) => stageOf(pull) === "checking" || stageOf(pull) === "rework";
 
 /** Only a pull request ready to audit opens. A signed one is closed for good. */
 export const canOpen = (pull: Pull) => stageOf(pull) === "ready";
@@ -36,7 +35,7 @@ const DECISION: Record<string, Decision> = {
   accept: { label: "Accepted", next: "", border: "border-caught/50", text: "text-caught", wash: "bg-caught-wash", dot: "bg-caught" },
   reject: {
     label: "Rejected",
-    next: "Back with the AI agent: it fixes the change, the AI checks it again, and it comes back here.",
+    next: "Back with the AI agent: it fixes the change, then the AI checks it again.",
     border: "border-missed",
     text: "text-missed",
     wash: "bg-missed-wash",
@@ -97,7 +96,7 @@ function statusOf(pull: Pull): { text: string; dot: string } {
 const CLOSED_TITLE: Record<Exclude<Stage, "ready">, string> = {
   checking: "The AI check of this pull request has not finished. It opens once the results are in.",
   rework: "Rejected and back with the AI agent. It opens again once the AI has checked the fixed change.",
-  followup: "Sent for a full human read. A sign-off cannot be changed.",
+  followup: "Full review required: a person reads the whole change on GitHub. A sign-off cannot be changed.",
   done: "This pull request is signed and accepted. A sign-off cannot be changed.",
 };
 
@@ -152,9 +151,8 @@ export function PullGroups({
 }) {
   const groups: [string, Pull[]][] = [
     ["Waiting for your audit", pulls.pull_requests.filter((item) => stageOf(item) === "ready")],
-    ["AI check running", pulls.pull_requests.filter((item) => stageOf(item) === "checking")],
-    ["Needs a full read", pulls.pull_requests.filter((item) => stageOf(item) === "followup")],
-    ["Back with the AI agent", pulls.pull_requests.filter((item) => stageOf(item) === "rework")],
+    ["AI check running", pulls.pull_requests.filter((item) => stageOf(item) === "checking" || stageOf(item) === "rework")],
+    ["Full review required", pulls.pull_requests.filter((item) => stageOf(item) === "followup")],
     ["Accepted", pulls.pull_requests.filter((item) => stageOf(item) === "done")],
   ];
   return (
@@ -176,41 +174,151 @@ export function PullGroups({
   );
 }
 
-export function SpotNote({ pulls }: { pulls: PullList }) {
-  const spot = pulls.spot_checks;
+/** The repository Seal is watching. */
+export function RepoLink({ pulls }: { pulls: PullList }) {
   return (
-    <div className="space-y-1.5 px-3 text-[12.5px] leading-snug text-soft">
-      {spot.enabled && (
-        <p title="Now and then the code shown for sign-off is a copy with a planted mistake. Accepting it is recorded.">
-          {spot.rate != null && spot.rate < 1 ? `About ${Math.round(spot.rate * 100)}% of first sign-offs are spot-checks.` : "Sign-offs are spot-checked."}
-          {spot.checked > 0 && ` People caught ${spot.caught} of ${spot.checked}.`}
-        </p>
-      )}
-      <a
-        href={pulls.repository_url}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-1.5 font-mono text-[12px] hover:text-ink"
-        title="The repository this tool is watching"
-      >
-        <RepoIcon size={13} />
-        {pulls.repository}
-      </a>
-    </div>
-  );
-}
-
-/** Only a full read needs GitHub: that is where the person reads the whole change. */
-function GitHubLink({ pull }: { pull: Pull }) {
-  return (
-    <a href={pull.url} target="_blank" rel="noreferrer" title={`Open pull request #${pull.number} on GitHub`} className="btn h-8 px-3 text-[13px]">
-      Read on GitHub
-      <ArrowUpRight size={14} />
+    <a
+      href={pulls.repository_url}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex min-w-0 items-center gap-1.5 font-mono text-[12px] text-soft hover:text-ink"
+      title="The repository Seal is watching"
+    >
+      <RepoIcon size={13} className="shrink-0" />
+      <span className="truncate">{pulls.repository}</span>
     </a>
   );
 }
 
-function LandingRow({ pull, index, fresh, onOpen }: { pull: Pull; index: number; fresh: boolean; onOpen: () => void }) {
+/**
+ * Who is signed in. A stand-in until Seal signs people in with GitHub: the account that owns the
+ * repository Seal is watching. A real sign-in would also put a verified name on every sign-off.
+ */
+export function Account({ pulls, compact = false }: { pulls: PullList; compact?: boolean }) {
+  const login = pulls.repository.split("/")[0] || "you";
+  return (
+    <span className="flex shrink-0 items-center gap-2" title={`Signed in with GitHub as ${login}`}>
+      <span
+        className="grid h-7 w-7 place-items-center rounded-full bg-ink text-[12px] font-semibold uppercase text-white ring-2 ring-panel"
+        aria-hidden="true"
+      >
+        {login.charAt(0)}
+      </span>
+      <span className={compact ? "sr-only" : "hidden text-[13.5px] font-medium sm:inline"}>{login}</span>
+    </span>
+  );
+}
+
+/** A full read happens on GitHub, where the person reads the whole change. */
+function GitHubButton({ pull }: { pull: Pull }) {
+  return (
+    <a href={pull.url} target="_blank" rel="noreferrer" title={`Open pull request #${pull.number} on GitHub`} className="btn h-8 px-3 text-[13px]">
+      <GitHubMark size={15} />
+      Read on GitHub
+    </a>
+  );
+}
+
+/** The pull request itself, one click away. */
+function GitHubIconLink({ pull }: { pull: Pull }) {
+  return (
+    <a
+      href={pull.url}
+      target="_blank"
+      rel="noreferrer"
+      title={`Open pull request #${pull.number} on GitHub`}
+      aria-label={`Open pull request #${pull.number} on GitHub`}
+      className="pointer-events-auto relative z-10 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-soft transition-colors hover:bg-canvas hover:text-ink"
+    >
+      <GitHubMark size={17} />
+    </a>
+  );
+}
+
+/** The way into an audit. Pointing at it sweeps a colour to the right, the way the audit moves on. */
+function StartButton({ saved, onOpen }: { saved: boolean; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group/start pointer-events-auto relative z-10 ml-auto inline-flex h-8 items-center gap-1.5 overflow-hidden rounded-lg border border-line px-3 text-[13px] font-medium text-ink transition-colors duration-300 hover:border-transparent focus-visible:border-transparent"
+    >
+      <span
+        aria-hidden="true"
+        className="absolute inset-0 origin-left scale-x-0 bg-gradient-to-r from-ai via-[#5a6be0] to-link transition-transform duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover/start:scale-x-100 group-focus-visible/start:scale-x-100 motion-reduce:transition-none"
+      />
+      <span className="relative transition-colors duration-200 group-hover/start:text-white group-focus-visible/start:text-white">
+        {saved ? "Continue audit" : "Start audit"}
+      </span>
+      <ArrowRight
+        size={15}
+        className="relative transition-[transform,color] duration-300 group-hover/start:translate-x-1 group-hover/start:text-white group-focus-visible/start:translate-x-1 group-focus-visible/start:text-white motion-reduce:transition-none"
+      />
+    </button>
+  );
+}
+
+/**
+ * How long ago, roughly: "less than a minute", "12 min", "5 h", "3 days", "4 months". Measured against the
+ * clock of the computer showing the page. No seconds: a queue that counts seconds is only restless.
+ */
+function age(iso: string | undefined, now: number): string | null {
+  const then = iso ? Date.parse(iso) : Number.NaN;
+  if (Number.isNaN(then)) return null;
+  const minutes = Math.max(0, Math.floor((now - then) / 60000));
+  if (minutes < 1) return "less than a minute";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} h`;
+  const days = Math.floor(hours / 24);
+  if (days < 60) return plural(days, "day");
+  return plural(Math.floor(days / 30), "month");
+}
+
+/**
+ * A short explanation shown on hover or keyboard focus. It is drawn on top of the page, so the
+ * scrolling columns of the board cannot cut it off.
+ */
+function Hint({ text, children }: { text: string; children: ReactNode }) {
+  const anchor = useRef<HTMLSpanElement>(null);
+  const [box, setBox] = useState<DOMRect | null>(null);
+  const show = () => setBox(anchor.current?.getBoundingClientRect() ?? null);
+  const hide = () => setBox(null);
+  return (
+    <>
+      <span
+        ref={anchor}
+        tabIndex={0}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+        aria-label={text}
+        className="inline-flex cursor-help items-start gap-1 rounded outline-offset-2"
+      >
+        {children}
+        <InfoIcon size={13} className="mt-[3px] shrink-0 opacity-70" />
+      </span>
+      {box &&
+        createPortal(
+          <motion.span
+            role="tooltip"
+            initial={{ opacity: 0, y: -3 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.12 }}
+            className="pointer-events-none fixed z-[60] block w-max max-w-[17rem] rounded-lg bg-ink px-2.5 py-1.5 text-[12.5px] leading-snug text-white shadow-[var(--shadow-pop)]"
+            style={{ left: Math.max(8, Math.min(box.left, window.innerWidth - 280)), top: box.bottom + 6 }}
+          >
+            {text}
+          </motion.span>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/** One pull request on the board. Everything a row of the list showed, stacked to fit a column. */
+function Card({ pull, index, now, fresh, onOpen }: { pull: Pull; index: number; now: number; fresh: boolean; onOpen: () => void }) {
   const reduced = useReducedMotion() ?? false;
   const stage = stageOf(pull);
   const status = statusOf(pull);
@@ -221,14 +329,22 @@ function LandingRow({ pull, index, fresh, onOpen }: { pull: Pull; index: number;
 
   const shell =
     stage === "ready"
-      ? "border border-hair bg-panel shadow-[var(--shadow-card)] hover:-translate-y-px hover:border-line hover:shadow-[0_6px_20px_rgb(0_0_0/0.06)]"
+      ? "border border-hair bg-panel shadow-[var(--shadow-card)] hover:border-line"
       : stage === "checking"
         ? "cursor-progress border border-hair bg-panel/70"
-        : stage === "followup"
-          ? `border-[1.5px] bg-panel ${decision.border}`
-          : stage === "rework"
-            ? "cursor-progress border-[1.5px] border-missed/40 bg-panel/60"
+        : stage === "rework"
+          ? "cursor-progress border-[1.5px] border-missed/40 bg-panel/70"
+          : stage === "followup"
+            ? `border-[1.5px] bg-panel ${decision.border}`
             : `border-[1.5px] bg-panel/60 ${decision.border}`;
+
+  const statusText = saved ? `Your audit: ${saved.done} of ${saved.total} steps done` : status.text;
+  const statusLine = (pull.status === "signed" || saved != null) && (
+    <span className={`flex items-start gap-1.5 ${pull.status === "signed" ? decision.text : "text-soft"}`}>
+      <i className={`mt-[6px] inline-block h-1.5 w-1.5 shrink-0 rounded-full ${status.dot}`} aria-hidden="true" />
+      {decision.next ? <Hint text={decision.next}>{statusText}</Hint> : statusText}
+    </span>
+  );
 
   const body = (
     <>
@@ -236,70 +352,97 @@ function LandingRow({ pull, index, fresh, onOpen }: { pull: Pull; index: number;
         <motion.span
           className={`pointer-events-none absolute -inset-[1.5px] rounded-xl border-2 ${decision.border.replace("/50", "")}`}
           initial={{ opacity: 1, scale: 1 }}
-          animate={{ opacity: 0, scale: 1.03 }}
+          animate={{ opacity: 0, scale: 1.04 }}
           transition={{ duration: 1.6, delay: 1, ease: "easeOut" }}
           aria-hidden="true"
         />
       )}
-      <span
-        className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[13px] font-semibold ${
-          pull.status === "signed" ? `${decision.wash} ${decision.text}` : "bg-canvas text-soft group-hover:text-ink"
-        }`}
-      >
-        {stage === "done" ? <CheckIcon size={16} strokeWidth={2.4} /> : `#${pull.number}`}
-      </span>
-      <span className={`min-w-0 flex-1 ${quiet ? "opacity-60" : ""}`}>
-        <span className="line-clamp-2 block text-[15px] font-medium">
-          {stage === "done" && <span className="mr-1.5 text-soft">#{pull.number}</span>}
-          {pull.title}
+      <span className="flex items-start gap-3">
+        <span
+          className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[12.5px] font-semibold ${
+            pull.status === "signed" ? `${decision.wash} ${decision.text}` : "bg-canvas text-soft group-hover:text-ink"
+          }`}
+        >
+          {stage === "done" ? <CheckIcon size={15} strokeWidth={2.4} /> : `#${pull.number}`}
         </span>
-        <span className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[13px] text-soft">
-          {stage !== "checking" && (
-            <span className={`inline-flex items-center gap-1.5 ${pull.status === "signed" ? decision.text : ""}`}>
-              <i className={`inline-block h-1.5 w-1.5 rounded-full ${status.dot}`} aria-hidden="true" />
-              {saved ? `Your audit: ${saved.done} of ${saved.total} steps done` : status.text}
+        <span className={`min-w-0 flex-1 ${quiet ? "opacity-60" : ""}`}>
+          <span className="line-clamp-2 block text-[14px] font-medium leading-snug">
+            {stage === "done" && <span className="mr-1 text-soft">#{pull.number}</span>}
+            {pull.title}
+          </span>
+          <span className="mt-1.5 block space-y-0.5 text-[12.5px] leading-snug">
+            {/* The branch: the name engineers know the change by, and can check out. */}
+            <span className="flex items-center gap-1 font-mono text-[11.5px] text-soft" title={`Branch ${pull.change_id}`}>
+              <BranchIcon size={12} className="shrink-0" />
+              <span className="truncate">{pull.change_id}</span>
+            </span>
+            {statusLine}
+            {/* One AI reviewer per line, so a model name never breaks in the middle. */}
+            {pull.reviewers.length > 0 && (
+              <span className="flex items-start gap-1 text-soft" title="The AI reviewers tested on this pull request">
+                <BotIcon size={12} className="mt-[3px] shrink-0" />
+                <span className="flex min-w-0 flex-col">
+                  {pull.reviewers.map((name) => (
+                    <span key={name} className="truncate">
+                      {prettyModel(name)}
+                    </span>
+                  ))}
+                </span>
+              </span>
+            )}
+          </span>
+          {saved && (
+            <span className="mt-2 block h-[3px] overflow-hidden rounded-full bg-black/[0.08]" aria-hidden="true">
+              <span className="block h-full rounded-full bg-done" style={{ width: `${Math.round((saved.done / saved.total) * 100)}%` }} />
             </span>
           )}
-          <span>
-            {pull.author} · {plural(pull.files, "file")}
-          </span>
-          {stage !== "followup" && stage !== "rework" && pull.reviewers.length > 0 && (
-            <span className="truncate">{pull.reviewers.map(prettyModel).join(", ")}</span>
-          )}
         </span>
-        {(stage === "followup" || stage === "rework") && decision.next && <span className="mt-1 block text-[13px] text-ink">{decision.next}</span>}
-        {saved && (
-          <span className="mt-2 block h-[3px] w-48 max-w-full overflow-hidden rounded-full bg-black/[0.08]" aria-hidden="true">
-            <span className="block h-full rounded-full bg-done" style={{ width: `${Math.round((saved.done / saved.total) * 100)}%` }} />
-          </span>
-        )}
       </span>
     </>
   );
 
-  let action: ReactNode;
+  // Not signed yet: how long it has waited for review, next to what happens next. The exact opening time is on hover.
+  const waitedFor = pull.status !== "signed" ? age(pull.opened_at, now) : null;
+  const waiting = waitedFor && (
+    <span
+      className="inline-flex items-center gap-1 text-[12.5px] text-soft"
+      title={pull.opened_at ? `Opened ${new Date(pull.opened_at).toLocaleString()}` : undefined}
+    >
+      <ClockIcon size={12} className="shrink-0" />
+      Waiting {waitedFor}
+    </span>
+  );
+
+  let action: ReactNode = null;
   if (stage === "ready") {
     action = (
-      <span className="inline-flex items-center gap-1.5 text-[13.5px] font-medium text-soft group-hover:text-ink">
-        {saved ? "Continue audit" : "Start audit"}
-        <ArrowRight size={15} className="transition-transform group-hover:translate-x-0.5" />
-      </span>
+      <>
+        <GitHubIconLink pull={pull} />
+        {waiting}
+        <StartButton saved={saved != null} onOpen={onOpen} />
+      </>
     );
   } else if (stage === "checking" || stage === "rework") {
     action = (
-      <span className="inline-flex items-center gap-2 text-[13px] text-soft">
-        <Spinner size={18} />
-        <span className="hidden sm:inline">AI check running</span>
-      </span>
+      <>
+        <span className="inline-flex items-center gap-2 text-[12.5px] text-soft">
+          <Spinner size={15} />
+          Check running
+        </span>
+        {waiting && <span className="ml-auto">{waiting}</span>}
+      </>
     );
   } else if (stage === "followup") {
-    action = <GitHubLink pull={pull} />;
-  } else {
-    // Accepted: done, nothing left to do.
-    action = null;
+    action = (
+      <span className="ml-auto">
+        <GitHubButton pull={pull} />
+      </span>
+    );
   }
 
-  const row = "group relative flex w-full items-center gap-4 rounded-xl px-4 py-3.5 text-left transition-[box-shadow,border-color,transform,background-color] duration-150";
+  const card = "group relative block w-full rounded-xl px-3.5 py-3 text-left transition-[box-shadow,border-color,background-color] duration-150";
+  // Same columns as the card above: the gap matches the one between the number badge and the title.
+  const footer = action && <span className="pointer-events-none relative mt-3 flex items-center gap-3 border-t border-hair pt-2.5 [&>*]:pointer-events-auto">{action}</span>;
 
   return (
     <motion.li
@@ -309,46 +452,81 @@ function LandingRow({ pull, index, fresh, onOpen }: { pull: Pull; index: number;
       transition={{ duration: 0.25, delay: index * 0.04, layout: { type: "spring", stiffness: 260, damping: 30 } }}
     >
       {stage === "ready" ? (
-        <button
-          type="button"
-          onClick={onOpen}
-          aria-label={`Pull request ${pull.number}: ${pull.title}. ${saved ? `Your audit: ${saved.done} of ${saved.total} steps done` : status.text}`}
-          className={`${row} ${shell}`}
-        >
-          {body}
-          <span className="shrink-0">{action}</span>
-        </button>
+        // The whole card opens the audit; the GitHub mark and the start button sit on top of it.
+        <div className={`${card} ${shell} cursor-pointer`}>
+          <button type="button" onClick={onOpen} tabIndex={-1} aria-hidden="true" className="absolute inset-0 rounded-xl" />
+          <span className="pointer-events-none block">{body}</span>
+          {footer}
+        </div>
       ) : (
-        <div title={CLOSED_TITLE[stage]} className={`${row} ${shell}`}>
+        <div className={`${card} ${shell}`}>
           {body}
-          <span className="shrink-0">{action}</span>
+          {footer}
         </div>
       )}
     </motion.li>
   );
 }
 
-function Section({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
+/** How many accepted cards show before the rest fold away. */
+const ACCEPTED_SHOWN = 5;
+
+function Column({
+  title,
+  count,
+  focus = false,
+  empty,
+  children,
+  more,
+}: {
+  title: string;
+  count: number;
+  /** The one column where the person acts. */
+  focus?: boolean;
+  empty: string;
+  children: ReactNode;
+  more?: ReactNode;
+}) {
   return (
-    <section className="mt-9 first:mt-8">
-      <header className="flex flex-wrap items-baseline justify-between gap-x-4 px-1">
+    <section
+      className={`flex min-h-0 w-[19rem] shrink-0 snap-start flex-col rounded-2xl p-2.5 lg:w-auto ${
+        focus ? "border border-line bg-panel shadow-[var(--shadow-card)]" : "bg-black/[0.03]"
+      }`}
+    >
+      {/* The count sits right after the name, in grey: how many, not which step. */}
+      <header className="flex items-baseline gap-2 px-1.5 pb-2.5 pt-1">
         <h2 className="text-[13.5px] font-semibold">{title}</h2>
-        <p className="text-[12.5px] text-faint">{hint}</p>
+        <span className="text-[13px] tabular-nums text-faint" title={plural(count, "pull request")}>
+          {count}
+        </span>
       </header>
-      <ol className="mt-2.5 space-y-2.5">{children}</ol>
+      <ol className="thin-scroll -mx-1 min-h-0 flex-1 space-y-2.5 overflow-y-auto px-1 pb-1">
+        {count > 0 ? (
+          children
+        ) : (
+          <li className="rounded-xl border border-dashed border-line px-3 py-5 text-center text-[12.5px] leading-snug text-faint">{empty}</li>
+        )}
+        {more}
+      </ol>
     </section>
   );
 }
 
 /**
- * The landing page: every pull request in one list in the middle of the screen, in three parts.
- * At the top what is ready for a person (and what the AI is still checking), then what was signed
- * but needs follow-up (rejected, or sent for a full read), and at the bottom an archive of what was
- * accepted. After a sign-off the page comes back here and the signed pull request moves to its part.
+ * The landing page: a board with one column per step. The AI checks a pull request, a person
+ * audits it, and it ends accepted, under a human's full read, or back with the AI. Cards move
+ * between columns as their state changes; only the cards ready for an audit open.
  */
 export function Landing({ pulls, justSigned, onOpen }: { pulls: PullList; justSigned: number | null; onOpen: (number: number) => void }) {
-  // Show the pull request just signed at the top for a moment, then let it move to where it belongs.
+  // Show the pull request just signed in the audit column for a moment, then let it move to its column.
   const [holdBack, setHoldBack] = useState(justSigned);
+  const [allAccepted, setAllAccepted] = useState(false);
+  // "Waiting 3 days" follows the clock: redraw every minute.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
   useEffect(() => {
     if (holdBack == null) return;
     const timer = window.setTimeout(() => setHoldBack(null), 700);
@@ -357,64 +535,61 @@ export function Landing({ pulls, justSigned, onOpen }: { pulls: PullList; justSi
 
   const placed = (pull: Pull): Stage => (pull.number === holdBack ? "ready" : stageOf(pull));
   const byNumber = (a: Pull, b: Pull) => a.number - b.number;
-  // The newest sign-off last, so a pull request just signed lands at the very bottom of its part.
-  const bySignedAt = (a: Pull, b: Pull) => (a.signed?.signed_at ?? "").localeCompare(b.signed?.signed_at ?? "");
+  const newestFirst = (a: Pull, b: Pull) => (b.signed?.signed_at ?? "").localeCompare(a.signed?.signed_at ?? "");
   const all = pulls.pull_requests;
-  const waiting = [
-    ...all.filter((pull) => placed(pull) === "ready").sort(byNumber),
+  const checking = [
     ...all.filter((pull) => placed(pull) === "checking").sort(byNumber),
+    ...all.filter((pull) => placed(pull) === "rework").sort(newestFirst),
   ];
-  // What a person must act on first, then what is back with the AI agent.
-  const followup = [
-    ...all.filter((pull) => placed(pull) === "followup").sort(bySignedAt),
-    ...all.filter((pull) => placed(pull) === "rework").sort(bySignedAt),
-  ];
-  const done = all.filter((pull) => placed(pull) === "done").sort(bySignedAt);
-  const checking = all.filter((pull) => stageOf(pull) === "checking").length;
-  const ready = waiting.length - checking;
+  const ready = all.filter((pull) => placed(pull) === "ready").sort(byNumber);
+  const humanReview = all.filter((pull) => placed(pull) === "followup").sort(newestFirst);
+  const accepted = all.filter((pull) => placed(pull) === "done").sort(newestFirst);
+  const acceptedShown = allAccepted ? accepted : accepted.slice(0, ACCEPTED_SHOWN);
+  const hidden = accepted.length - acceptedShown.length;
 
   let index = 0;
-  const rows = (list: Pull[]) =>
-    list.map((pull) => <LandingRow key={pull.number} pull={pull} index={index++} fresh={pull.number === justSigned} onOpen={() => onOpen(pull.number)} />);
+  const cards = (list: Pull[]) =>
+    list.map((pull) => <Card key={pull.number} pull={pull} index={index++} now={now} fresh={pull.number === justSigned} onOpen={() => onOpen(pull.number)} />);
 
   return (
-    <div className="thin-scroll h-full overflow-y-auto">
-      <div className="mx-auto max-w-[46rem] px-4 pb-16 pt-[7vh]">
-        <div className="flex items-center gap-4">
-          <img src="/seal.svg" alt="" className="h-14 w-14 shrink-0 drop-shadow-[0_2px_4px_rgb(0_0_0/0.06)]" />
-          <div>
-            <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.015em]">Pull requests to audit</h1>
-            <p className="mt-1 text-[14px] text-soft">Open one to audit its AI review, then sign. Signed pull requests move down the list.</p>
-          </div>
-        </div>
-
-        <LayoutGroup>
-          <Section
-            title="Ready for your audit"
-            hint={[ready > 0 && `${ready} checked by the AI`, checking > 0 && `${checking} AI check running`].filter(Boolean).join(" · ") || "Nothing waiting"}
-          >
-            {waiting.length > 0 ? (
-              rows(waiting)
-            ) : (
-              <li className="rounded-xl border border-dashed border-line px-4 py-5 text-center text-[13.5px] text-soft">Nothing is waiting for you.</li>
-            )}
-          </Section>
-          {followup.length > 0 && (
-            <Section title="Needs follow-up" hint="Sent for a full human read, or rejected and back with the AI agent">
-              {rows(followup)}
-            </Section>
-          )}
-          {done.length > 0 && (
-            <Section title="Accepted" hint="Signed and done">
-              {rows(done)}
-            </Section>
-          )}
-        </LayoutGroup>
-
-        <div className="mt-10">
-          <SpotNote pulls={pulls} />
-        </div>
+    <div className="flex h-full flex-col">
+      <div className="mx-auto w-full max-w-[96rem] px-4 pb-5 pt-8 sm:px-6">
+        <h1 className="px-1 text-[26px] font-semibold leading-tight tracking-[-0.015em]">Pull requests to audit</h1>
       </div>
+      <LayoutGroup>
+        {/* Four columns side by side on a wide screen; narrower screens scroll the board sideways. */}
+        <div className="thin-scroll mx-auto flex min-h-0 w-full max-w-[96rem] flex-1 snap-x scroll-px-4 gap-4 overflow-x-auto px-4 pb-6 sm:scroll-px-6 sm:px-6 lg:grid lg:grid-cols-4 lg:overflow-x-visible">
+          <Column title="Pending" count={checking.length} empty="Nothing is pending.">
+            {cards(checking)}
+          </Column>
+          <Column title="Ready for your audit" count={ready.length} focus empty="Nothing is waiting for you.">
+            {cards(ready)}
+          </Column>
+          <Column title="Full review required" count={humanReview.length} empty="Pull requests that need a full human read show up here.">
+            {cards(humanReview)}
+          </Column>
+          <Column
+            title="Accepted"
+            count={accepted.length}
+            empty="Accepted pull requests show up here."
+            more={
+              hidden > 0 || allAccepted ? (
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => setAllAccepted(!allAccepted)}
+                    className="w-full rounded-lg py-1.5 text-center text-[12.5px] text-soft hover:bg-black/[0.04] hover:text-ink"
+                  >
+                    {allAccepted ? "Show fewer" : `Show ${hidden} more`}
+                  </button>
+                </li>
+              ) : null
+            }
+          >
+            {cards(acceptedShown)}
+          </Column>
+        </div>
+      </LayoutGroup>
     </div>
   );
 }

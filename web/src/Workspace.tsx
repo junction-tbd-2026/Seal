@@ -386,28 +386,24 @@ export function Workspace({
         ? `Reported ${plural(reviewer.findings.length, "problem")} in the real code.`
         : "Reported no problems. The verdict is an opinion, not proof.",
   };
-  const examinerOverall: BriefNode = {
+  const missedCount = defectResults.filter((result) => result === "missed").length;
+  // What the referee AI did, in the order it happened: it planted mistakes, then saw how many the AI reviewer noticed.
+  // False alarms are left to the Test step itself, next to the squares.
+  const refereeOverall: BriefNode = {
     who: "examiner",
-    meta: "Examiner AI · our test",
+    meta: "Referee AI",
     title:
       counts.defects_total > 0 ? (
-        <span className={counts.defects_caught === counts.defects_total ? "text-caught" : "text-missed"}>
-          Noticed {counts.defects_caught} of {plural(counts.defects_total, "planted mistake")}
-        </span>
-      ) : (
-        <span className="text-soft">Could not be tested</span>
-      ),
-    detail:
-      counts.defects_total > 0 ? (
         <>
-          <Dots results={defectResults} />
-          {counts.harmless_total > 0 && (
-            <span className="mt-1.5 block">
-              {counts.false_alarms === 0 ? "No false alarm" : plural(counts.false_alarms, "false alarm")} on {plural(counts.harmless_total, "harmless edit")}.
-            </span>
-          )}
+          Planted {plural(counts.defects_total, "mistake")},{" "}
+          <span className={missedCount > 0 ? "text-missed" : "text-caught"}>
+            {model} missed {missedCount > 0 ? missedCount : "none"}
+          </span>
         </>
-      ) : undefined,
+      ) : (
+        <span className="text-soft">Could not test {model}</span>
+      ),
+    detail: counts.defects_total > 0 ? <Dots results={defectResults} /> : undefined,
   };
   const spotTask = (plant: Plant): BriefTask => ({
     text: `Judge the blind spot, ${lines(plant.line_start, plant.line_end)}`,
@@ -439,7 +435,7 @@ export function Workspace({
       },
       {
         who: "examiner",
-        meta: "Examiner AI · our test",
+        meta: "Referee AI",
         title: (
           <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
             <span className={TONE_TEXT[step.tone]}>{step.test.verdict}</span>
@@ -448,22 +444,21 @@ export function Workspace({
         ),
         detail: step.test.detail,
       },
-      { who: "you", meta: "You · auditor", title: "Audit the claim", tasks },
+      { who: "you", meta: "You", tasks },
     ];
   } else if (step.kind === "spots") {
     nodes = [
       { who: "ai", meta: `${model} · AI reviewer`, title: `Missed ${plural(step.spots.length, "planted mistake")}`, detail: "At lines that belong to no single objective." },
-      { who: "examiner", meta: "Examiner AI · our test", title: <span className="text-missed">Blind spots</span>, detail: "We planted them in test copies. None is in the real code." },
-      { who: "you", meta: "You · auditor", title: "Judge the real code", tasks: step.spots.map(spotTask) },
+      { who: "examiner", meta: "Referee AI", title: <span className="text-missed">Blind spots</span>, detail: "It planted them in test copies only. None is in the real code." },
+      { who: "you", meta: "You", tasks: step.spots.map(spotTask) },
     ];
   } else if (step.kind === "findings") {
     nodes = [
       { who: "ai", meta: `${model} · AI reviewer`, title: `Reported ${plural(step.findings.length, "problem")}` },
-      { who: "examiner", meta: "Examiner AI · our test", title: <span className="text-soft">Not tested</span>, detail: "We test claims, not reported problems." },
+      { who: "examiner", meta: "Referee AI", title: <span className="text-soft">Not tested</span>, detail: "It tests claims, not reported problems." },
       {
         who: "you",
-        meta: "You · auditor",
-        title: "Judge each problem",
+        meta: "You",
         tasks: step.findings.map((finding, number) => ({
           text: `${fileName(finding.file)}, ${lines(finding.line_start, finding.line_end)}`,
           done: progress.findings[String(number)] != null,
@@ -476,33 +471,32 @@ export function Workspace({
     const flagged = states.filter((item) => item.flagged).length;
     nodes = [
       aiOverall,
-      examinerOverall,
+      refereeOverall,
       {
         who: "you",
-        meta: "You · auditor",
-        title: "Sign the audit",
+        meta: "You",
         tasks: [
           { text: `${done} of ${plural(judged.length, "step")} done`, done: done === judged.length },
           ...(flagged > 0 ? [{ text: `${plural(flagged, "step")} marked wrong`, flagged: true }] : []),
-          { text: "Accept, ask for a full read, or reject", done: signed != null },
+          { text: "Accept, ask for a full review, or reject", done: signed != null },
         ],
       },
     ];
   } else {
-    const objectives = steps.filter((item) => item.kind === "point").length;
-    const blind = reviewer.read_yourself.length;
+    // No counts: the step bar already shows how many steps there are.
+    const objectives = steps.some((item) => item.kind === "point");
+    const blind = reviewer.read_yourself.length > 0;
     nodes = [
       aiOverall,
-      examinerOverall,
+      refereeOverall,
       {
         who: "you",
-        meta: "You · auditor",
-        title: "Audit the review",
+        meta: "You",
         tasks: [
-          ...(objectives > 0 ? [{ text: `Audit ${plural(objectives, "review objective")}` }] : []),
-          ...(blind > 0 ? [{ text: `Judge ${plural(blind, "blind spot")}` }] : []),
-          ...(reviewer.findings.length > 0 ? [{ text: `Judge ${plural(reviewer.findings.length, "reported problem")}` }] : []),
-          { text: "Sign: accept, ask for a full read, or reject" },
+          ...(objectives ? [{ text: "Audit the review objectives" }] : []),
+          ...(blind ? [{ text: "Judge the blind spots" }] : []),
+          ...(reviewer.findings.length > 0 ? [{ text: "Judge the reported problems" }] : []),
+          { text: "Accept, ask for a full review, or reject" },
         ],
       },
     ];

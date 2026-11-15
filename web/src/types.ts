@@ -122,6 +122,8 @@ export type Pull = {
   title: string;
   author: string;
   files: number;
+  /** When the pull request was opened (ISO time). */
+  opened_at?: string;
   url: string;
   status: PullStatus;
   lines_to_read: number;

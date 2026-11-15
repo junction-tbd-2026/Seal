@@ -1,9 +1,9 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowUpRight, BotIcon, CheckIcon, ChevronDown, PanelIcon, PullIcon, XIcon } from "./icons";
+import { ArrowLeft, BotIcon, CheckIcon, ChevronDown, GitHubMark, PanelIcon, PullIcon, XIcon } from "./icons";
 import { fetchPulls, fetchReview, postSignOff, prettyModel } from "./lib";
 import { clearSaved, codeFingerprint, storageKey } from "./progress";
-import { Landing, PullGroups, SpotNote, canOpen, isWaitingOnAi } from "./Pulls";
+import { Account, Landing, PullGroups, RepoLink, canOpen, stageOf } from "./Pulls";
 import { SpotCheckReveal } from "./SpotCheck";
 import type { Exam, PullList, SignOff, SignResult, SpotVerdict } from "./types";
 import { Workspace } from "./Workspace";
@@ -97,7 +97,6 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [reviewerName, setReviewerName] = useState<string | null>(null);
   const [signoffs, setSignoffs] = useState<SignOff[]>([]);
-  const [tab, setTab] = useState<"brief" | "pulls">("brief");
   const [sideOpen, setSideOpen] = useState(false);
   const [briefSlot, setBriefSlot] = useState<HTMLDivElement | null>(null);
   const reduced = useReducedMotion() ?? false;
@@ -118,9 +117,8 @@ export default function App() {
     void loadPulls();
   }, [loadPulls]);
 
-  // While the AI is at work on a pull request (a first check, or a rejected change being fixed and checked again),
-  // ask again now and then, so it opens up once its results are in.
-  const checking = pulls?.pull_requests.some(isWaitingOnAi) ?? false;
+  // While an AI check is running, ask again now and then, so the pull request opens up once its results are in.
+  const checking = pulls?.pull_requests.some((item) => stageOf(item) === "checking") ?? false;
   useEffect(() => {
     if (!checking) return;
     const timer = window.setInterval(() => void loadPulls(), POLL_MS);
@@ -132,7 +130,6 @@ export default function App() {
     setSelected(number);
     setSideOpen(false);
     if (number != null) {
-      setTab("brief");
       setJustSigned(null);
     }
     const address = number == null ? window.location.pathname : `${window.location.pathname}?pr=${number}`;
@@ -176,7 +173,6 @@ export default function App() {
   const reviewer = exam?.reviewers.find((item) => item.name === reviewerName) ?? exam?.reviewers[0] ?? null;
   // Saved checks belong to the code they were made on. A spot-check copy and the real change differ here.
   const code = useMemo(() => (exam ? codeFingerprint(exam.change.files) : ""), [exam]);
-  const hasBrief = Boolean(pull && exam && reviewer);
   const select = (number: number) => go(number);
 
   const sign = async (name: string, decision: string, spots: { plant_id: string; verdict: SpotVerdict }[]) => {
@@ -236,14 +232,18 @@ export default function App() {
       </main>
     );
 
-  const activeTab = hasBrief ? tab : "pulls";
 
   // Home: the list of pull requests in the middle of the screen.
   if (!pull) {
     return (
       <div className="flex h-full flex-col">
-        <header className="flex h-12 shrink-0 items-center px-3 sm:px-4">
+        <header className="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-hair bg-panel px-3 sm:px-4">
           <Brand onHome={() => go(null)} />
+          <div className="flex min-w-0 items-center gap-4">
+            <RepoLink pulls={pulls} />
+            <span className="h-5 w-px shrink-0 bg-line" aria-hidden="true" />
+            <Account pulls={pulls} />
+          </div>
         </header>
         <main className="min-h-0 flex-1">
           <Landing pulls={pulls} justSigned={justSigned} onOpen={(number) => go(number)} />
@@ -276,7 +276,7 @@ export default function App() {
             type="button"
             onClick={() => setSideOpen(true)}
             className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-soft hover:bg-subtle hover:text-ink lg:hidden"
-            aria-label="Show the audit brief and pull requests"
+            aria-label="Show the audit brief"
           >
             <PanelIcon size={17} />
           </button>
@@ -317,8 +317,8 @@ export default function App() {
                       close();
                     }}
                   />
-                  <div className="mt-2 border-t border-hair pb-1.5 pt-2.5">
-                    <SpotNote pulls={pulls} />
+                  <div className="mt-2 border-t border-hair px-3 pb-1.5 pt-2.5">
+                    <RepoLink pulls={pulls} />
                   </div>
                 </>
               )}
@@ -331,63 +331,66 @@ export default function App() {
               rel="noreferrer"
               title={`Open pull request #${pull.number} on GitHub`}
               aria-label={`Open pull request #${pull.number} on GitHub`}
-              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-faint hover:bg-subtle hover:text-ink"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-soft hover:bg-subtle hover:text-ink"
             >
-              <ArrowUpRight size={16} />
+              <GitHubMark size={16} />
             </a>
           )}
         </div>
-        {exam && reviewer && (
-          <Dropdown
-            align="right"
-            label="AI reviewer under audit"
-            trigger={(open) => (
-              <span
-                className={`flex h-[28.5px] items-center gap-2 rounded-lg px-2.5 text-[14px] font-medium text-ai transition-colors ${
-                  open ? "bg-ai-tint" : "bg-ai-wash hover:bg-ai-tint"
-                }`}
-              >
-                <BotIcon size={15} className="shrink-0" />
-                <span className="hidden sm:inline">Auditing</span>
-                <span className="max-w-[12rem] truncate">{prettyModel(reviewer.name)}</span>
-                {exam.reviewers.length > 1 && <ChevronDown size={15} className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />}
-              </span>
-            )}
-          >
-            {(close) => (
-              <div>
-                <p className="px-3 pb-1 pt-1 text-[12.5px] text-soft">AI reviewers of this pull request</p>
-                {exam.reviewers.map((item) => {
-                  const active = item.name === reviewer.name;
-                  return (
-                    <button
-                      key={item.name}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={active}
-                      onClick={() => {
-                        setReviewerName(item.name);
-                        close();
-                      }}
-                      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left ${active ? "bg-canvas" : "hover:bg-canvas"}`}
-                    >
-                      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-ai text-white">
-                        <BotIcon size={14} />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[14px] font-medium">{prettyModel(item.name)}</span>
-                        <span className="block text-[12.5px] text-soft">
-                          {item.counts.defects_total > 0 ? `Noticed ${item.counts.defects_caught} of ${item.counts.defects_total} planted mistakes` : "Could not be tested"}
+        <div className="flex shrink-0 items-center gap-3">
+          {exam && reviewer && (
+            <Dropdown
+              align="right"
+              label="AI reviewer under audit"
+              trigger={(open) => (
+                <span
+                  className={`flex h-[28.5px] items-center gap-2 rounded-lg px-2.5 text-[14px] font-medium text-ai transition-colors ${
+                    open ? "bg-ai-tint" : "bg-ai-wash hover:bg-ai-tint"
+                  }`}
+                >
+                  <BotIcon size={15} className="shrink-0" />
+                  <span className="hidden sm:inline">Auditing</span>
+                  <span className="max-w-[12rem] truncate">{prettyModel(reviewer.name)}</span>
+                  {exam.reviewers.length > 1 && <ChevronDown size={15} className={`shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />}
+                </span>
+              )}
+            >
+              {(close) => (
+                <div>
+                  <p className="px-3 pb-1 pt-1 text-[12.5px] text-soft">AI reviewers of this pull request</p>
+                  {exam.reviewers.map((item) => {
+                    const active = item.name === reviewer.name;
+                    return (
+                      <button
+                        key={item.name}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={active}
+                        onClick={() => {
+                          setReviewerName(item.name);
+                          close();
+                        }}
+                        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left ${active ? "bg-canvas" : "hover:bg-canvas"}`}
+                      >
+                        <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-ai text-white">
+                          <BotIcon size={14} />
                         </span>
-                      </span>
-                      {active && <CheckIcon size={15} className="shrink-0 text-soft" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </Dropdown>
-        )}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[14px] font-medium">{prettyModel(item.name)}</span>
+                          <span className="block text-[12.5px] text-soft">
+                            {item.counts.defects_total > 0 ? `Noticed ${item.counts.defects_caught} of ${item.counts.defects_total} planted mistakes` : "Could not be tested"}
+                          </span>
+                        </span>
+                        {active && <CheckIcon size={15} className="shrink-0 text-soft" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </Dropdown>
+          )}
+          <Account pulls={pulls} compact />
+        </div>
       </header>
 
       <div className="flex min-h-0 flex-1 gap-4 px-2 pb-2 sm:px-4 sm:pb-4">
@@ -411,33 +414,22 @@ export default function App() {
           }`}
         >
           <div className="flex items-center gap-2">
-            <div className="relative flex flex-1 rounded-[10px] bg-subtle p-[3px]" role="tablist" aria-label="Side bar">
-              {(
-                [
-                  ["brief", "Audit brief"],
-                  ["pulls", "Pull requests"],
-                ] as const
-              ).map(([value, text]) => (
-                <button
-                  key={value}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === value}
-                  disabled={value === "brief" && !hasBrief}
-                  onClick={() => setTab(value)}
-                  className={`relative h-[30.5px] flex-1 rounded-lg text-[14px] font-medium ${activeTab === value ? "text-ink" : "text-soft hover:text-ink"} disabled:opacity-50`}
-                >
-                  {activeTab === value && (
-                    <motion.span
-                      layoutId="side-tab"
-                      className="absolute inset-0 rounded-lg bg-panel shadow-[0_1px_2px_rgb(0_0_0/0.06)]"
-                      transition={{ type: "spring", stiffness: 500, damping: 40 }}
-                    />
-                  )}
-                  <span className="relative">{text}</span>
-                </button>
-              ))}
-            </div>
+            {/* The way back to the board: the "Start audit" sweep, mirrored, so the colour runs the way you go. */}
+            <button
+              type="button"
+              onClick={() => go(null)}
+              className="group/back relative flex h-[36.5px] flex-1 items-center gap-2 overflow-hidden rounded-[10px] bg-subtle px-3 text-[14px] font-medium text-soft"
+            >
+              <span
+                aria-hidden="true"
+                className="absolute inset-0 origin-right scale-x-0 bg-gradient-to-l from-ai via-[#5a6be0] to-link transition-transform duration-[450ms] ease-[cubic-bezier(0.22,1,0.36,1)] group-hover/back:scale-x-100 group-focus-visible/back:scale-x-100 motion-reduce:transition-none"
+              />
+              <ArrowLeft
+                size={16}
+                className="relative transition-[transform,color] duration-300 group-hover/back:-translate-x-1 group-hover/back:text-white group-focus-visible/back:-translate-x-1 group-focus-visible/back:text-white motion-reduce:transition-none"
+              />
+              <span className="relative transition-colors duration-200 group-hover/back:text-white group-focus-visible/back:text-white">All pull requests</span>
+            </button>
             <button type="button" onClick={() => setSideOpen(false)} className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-soft hover:bg-subtle lg:hidden" aria-label="Close">
               <XIcon size={16} />
             </button>
@@ -445,17 +437,7 @@ export default function App() {
           <div className="thin-scroll min-h-0 flex-1 overflow-y-auto">
             <div className="rounded-[14px] border border-hair bg-panel">
               {/* The audit brief is drawn here by the review on screen; the slot stays mounted so it can. */}
-              <div ref={setBriefSlot} className={activeTab === "brief" ? "" : "hidden"} />
-              {activeTab === "pulls" && (
-                <div className="space-y-3 py-2.5">
-                  <div className="px-1.5">
-                    <PullGroups pulls={pulls} selected={selected} onSelect={select} />
-                  </div>
-                  <div className="border-t border-hair pt-3">
-                    <SpotNote pulls={pulls} />
-                  </div>
-                </div>
-              )}
+              <div ref={setBriefSlot} />
             </div>
           </div>
         </aside>

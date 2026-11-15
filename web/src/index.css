@@ -26,6 +26,8 @@
   --color-missed: #d44c47;
   --color-missed-wash: #fbedec;
   --color-warn: #b7791f;
+  /* A harmless edit the AI reviewer reported anyway: bright, so it reads as a colour of its own. */
+  --color-alarm: #fbbf24;
   --color-warn-wash: #fbf3db;
 
   --font-sans: "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;

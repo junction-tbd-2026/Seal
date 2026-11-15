@@ -10,7 +10,7 @@ const SQUARE: Record<Result, string> = {
   caught: "bg-caught",
   missed: "bg-panel shadow-[inset_0_0_0_2px_var(--color-missed)]",
   left_alone: "bg-caught-wash shadow-[inset_0_0_0_1px_rgb(63_125_88/0.25)]",
-  false_alarm: "bg-warn",
+  false_alarm: "bg-alarm",
   failed: "bg-panel bg-[repeating-linear-gradient(45deg,transparent_0_3px,rgb(0_0_0/0.12)_3px_5px)] shadow-[inset_0_0_0_1px_var(--color-line)]",
   inconclusive: "bg-panel bg-[repeating-linear-gradient(45deg,transparent_0_3px,rgb(0_0_0/0.12)_3px_5px)] shadow-[inset_0_0_0_1px_var(--color-line)]",
 };
@@ -19,7 +19,7 @@ const RESULT_TEXT: Record<Result, string> = {
   caught: "text-caught",
   missed: "text-missed",
   left_alone: "text-caught",
-  false_alarm: "text-warn",
+  false_alarm: "rounded bg-alarm px-1 text-ink",
   failed: "text-faint",
   inconclusive: "text-faint",
 };
@@ -62,13 +62,13 @@ function Fold({ title, children }: { title: string; children: ReactNode }) {
  */
 export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewer }) {
   const reduced = useReducedMotion() ?? false;
-  const [revealed, setRevealed] = useState(exam.plants.length);
+  // The squares come in one at a time when the step opens; with reduced motion they are all there at once.
+  const [revealed, setRevealed] = useState(() => (reduced ? exam.plants.length : 0));
   const [picked, setPicked] = useState<string | null>(null);
 
-  // Replay: reveal the squares one at a time.
   useEffect(() => {
     if (revealed >= exam.plants.length) return;
-    const timer = window.setTimeout(() => setRevealed((count) => count + 1), reduced ? 40 : 220);
+    const timer = window.setTimeout(() => setRevealed((count) => count + 1), reduced ? 0 : 140);
     return () => window.clearTimeout(timer);
   }, [revealed, exam.plants.length, reduced]);
 
@@ -86,16 +86,6 @@ export function ReviewerTest({ exam, reviewer }: { exam: Exam; reviewer: Reviewe
             Our test of {model}
           </span>
           <span className="text-[13px] text-soft">One square per copy of the change with one planted edit. Click a square to see it.</span>
-          <button
-            type="button"
-            onClick={() => {
-              setPicked(null);
-              setRevealed(0);
-            }}
-            className="ml-auto text-[13px] text-link hover:underline"
-          >
-            Replay
-          </button>
         </header>
         <div className="px-5 pb-5 pt-4">
           <p className="text-[22px] font-semibold tracking-[-0.01em]">

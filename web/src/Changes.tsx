@@ -41,7 +41,10 @@ type FileLayout = { file: FileDiff; blocks: Block[]; blind: number; cited: numbe
 
 export type Layout = { files: FileLayout[]; marked: boolean };
 
-const touches = (start: number, end: number, hunk: Hunk) => start <= hunk.end && end >= hunk.start;
+/** "Lines 236–242", "Line 239", or "Removed lines" for a run with nothing left in the new file. */
+const hunkLabel = (hunk: Pick<Hunk, "start" | "end">) => (!hunk.start ? "Removed lines" : hunk.end > hunk.start ? `Lines ${lineRange(hunk.start, hunk.end)}` : `Line ${hunk.start}`);
+
+const touches = (start: number, end: number, hunk: Pick<Hunk, "start" | "end">) => start <= hunk.end && end >= hunk.start;
 
 /** A file's changed runs, split where the diff skips unchanged lines. */
 function hunksOf(file: FileDiff): Hunk[] {
@@ -63,32 +66,38 @@ function hunksOf(file: FileDiff): Hunk[] {
 /** Every changed run of every file, with what the step asks the person to read in it. Files with something to read come first. */
 export function layoutChanges(files: FileDiff[], lens: Lens): Layout {
   const marked = !lens.readAll && (lens.cites.length > 0 || lens.blind.length > 0 || lens.findings.length > 0);
-  const laid = files.map((file, order) => {
+  // What one range of one file holds to read.
+  const inRange = (path: string, hunk: Pick<Hunk, "start" | "end">) => ({
+    cites: lens.cites.filter((cite) => sameFile(cite.file, path) && touches(cite.start, cite.end, hunk)),
+    blind: lens.blind.filter((plant) => sameFile(plant.file, path) && touches(plant.line_start, plant.line_end, hunk)),
+    findings: lens.findings.filter(({ finding }) => sameFile(finding.file, path) && touches(finding.line_start, finding.line_end, hunk)),
+  });
+
+  const layFile = (file: FileDiff, order: number) => {
     const hunks = hunksOf(file);
-    const blocks: Block[] = hunks.map((hunk, index) => ({
-      id: `block-${order}-${index}`,
-      hunk,
-      cites: lens.cites.filter((cite) => sameFile(cite.file, file.path) && touches(cite.start, cite.end, hunk)),
-      blind: lens.blind.filter((plant) => sameFile(plant.file, file.path) && touches(plant.line_start, plant.line_end, hunk)),
-      findings: lens.findings.filter(({ finding }) => sameFile(finding.file, file.path) && touches(finding.line_start, finding.line_end, hunk)),
-    }));
-    // Anything to read that falls outside the changed runs still gets a block of its own.
+    const blocks: Block[] = hunks.map((hunk, index) => ({ id: `block-${order}-${index}`, hunk, ...inRange(file.path, hunk) }));
+    // Anything to read that falls outside the changed runs still gets a block of its own, so its question
+    // can be answered. A spot-check copy can leave out a changed line altogether: then the block has no
+    // code to show. Overlapping targets share one block.
     const placed = (start: number, end: number) => hunks.some((hunk) => touches(start, end, hunk));
     const strays = [
-      ...lens.cites.filter((cite) => sameFile(cite.file, file.path) && !placed(cite.start, cite.end)).map((cite) => ({ start: cite.start, end: cite.end })),
-      ...lens.blind.filter((plant) => sameFile(plant.file, file.path) && !placed(plant.line_start, plant.line_end)).map((plant) => ({ start: plant.line_start, end: plant.line_end })),
-    ];
+      ...lens.blind.filter((plant) => sameFile(plant.file, file.path)).map((plant) => ({ start: plant.line_start, end: plant.line_end })),
+      ...lens.findings.filter(({ finding }) => sameFile(finding.file, file.path)).map(({ finding }) => ({ start: finding.line_start, end: finding.line_end })),
+      ...lens.cites.filter((cite) => sameFile(cite.file, file.path)).map((cite) => ({ start: cite.start, end: cite.end })),
+    ].filter((stray) => !placed(stray.start, stray.end));
+    const extra: Hunk[] = [];
     strays.forEach((stray, index) => {
+      if (extra.some((hunk) => touches(stray.start, stray.end, hunk))) return;
       const rows = excerptRows(file, stray.start, stray.end);
-      if (rows.length === 0) return;
-      const hunk: Hunk = { file, rows, start: stray.start, end: stray.end };
-      blocks.push({
-        id: `block-${order}-x${index}`,
-        hunk,
-        cites: lens.cites.filter((cite) => sameFile(cite.file, file.path) && touches(cite.start, cite.end, hunk)),
-        blind: lens.blind.filter((plant) => sameFile(plant.file, file.path) && touches(plant.line_start, plant.line_end, hunk)),
-        findings: [],
-      });
+      const numbers = rows.map((row) => row.n).filter((n): n is number => n != null);
+      const hunk: Hunk = {
+        file,
+        rows,
+        start: numbers.length ? Math.min(stray.start, ...numbers) : stray.start,
+        end: numbers.length ? Math.max(stray.end, ...numbers) : stray.end,
+      };
+      extra.push(hunk);
+      blocks.push({ id: `block-${order}-x${index}`, hunk, ...inRange(file.path, hunk) });
     });
     blocks.sort((a, b) => a.hunk.start - b.hunk.start);
     return {
@@ -99,7 +108,16 @@ export function layoutChanges(files: FileDiff[], lens: Lens): Layout {
       cited: blocks.filter((block) => block.cites.length > 0).length,
       findings: blocks.reduce((sum, block) => sum + block.findings.length, 0),
     };
-  });
+  };
+
+  const laid = files.map(layFile);
+  // A target in a file that is not in the change at all still needs a place.
+  const known = (path: string) => files.some((file) => sameFile(file.path, path));
+  const missing = [...lens.blind.map((plant) => plant.file), ...lens.findings.map(({ finding }) => finding.file), ...lens.cites.map((cite) => cite.file)].filter(
+    (path, index, all) => !known(path) && all.indexOf(path) === index,
+  );
+  missing.forEach((path, index) => laid.push(layFile({ path, status: "unchanged", added: 0, removed: 0, rows: [] }, files.length + index)));
+
   laid.sort((a, b) => b.blind - a.blind || b.findings - a.findings || b.cited - a.cited || a.order - b.order);
   return { files: laid, marked };
 }
@@ -132,7 +150,7 @@ function Pill({ tone, onTint, children, title }: { tone: "ai" | "missed" | "caug
 
 const Dot = ({ className }: { className: string }) => <i className={`inline-block h-1.5 w-1.5 rounded-full ${className}`} aria-hidden="true" />;
 
-/** The AI reviewer, the examiner and the person, as small round faces. */
+/** The AI reviewer, the referee AI and the person, as small round faces. */
 export function Avatar({ who, size = 18 }: { who: "ai" | "examiner" | "you"; size?: number }) {
   const style = { ai: "bg-ai", examiner: "bg-soft", you: "bg-ink" }[who];
   const Glyph = { ai: BotIcon, examiner: FlaskIcon, you: UserIcon }[who];
@@ -221,7 +239,7 @@ function plantedVerb(plants: Plant[]): string {
   return "planted a mistake";
 }
 
-/** A changed run that holds something to read: the code, then what the AI reviewer and our test say, then the question. */
+/** A changed run that holds something to read: the code, then what the AI reviewer and the referee AI say, then the question. */
 function BlockCard({
   block,
   onOpenFile,
@@ -278,7 +296,7 @@ function BlockCard({
           title={`Show these lines in the full ${fileName(hunk.file.path)}`}
           className="text-[14px] font-medium underline-offset-2 hover:text-link hover:underline"
         >
-          {hunk.start ? `Lines ${lineRange(hunk.start, hunk.end)}` : "Removed lines"}
+          {hunkLabel(hunk)}
         </button>
         {symbol && <span className="min-w-0 truncate font-mono text-[12.5px] text-faint">{symbol}</span>}
         <span className="ml-auto flex flex-wrap items-center gap-2">
@@ -315,7 +333,14 @@ function BlockCard({
         </span>
       </header>
 
-      <DiffView file={{ ...hunk.file, rows: hunk.rows }} marks={marks} fold className="py-1.5" />
+      {hunk.rows.length > 0 ? (
+        <DiffView file={{ ...hunk.file, rows: hunk.rows }} marks={marks} fold className="py-1.5" />
+      ) : (
+        <p className="px-4 py-3 text-[13px] leading-snug text-soft">
+          {hunk.end > hunk.start ? `Lines ${lineRange(hunk.start, hunk.end)} are` : `Line ${hunk.start} is`} not part of the change shown here, so there is no
+          code to show. Judge it in the file itself.
+        </p>
+      )}
 
       {block.blind.length > 0 && (
         <div className="space-y-3 border-t border-hair px-4 pb-4 pt-3">
@@ -328,7 +353,7 @@ function BlockCard({
             )}
             <span className="inline-flex items-center gap-2">
               <Avatar who="examiner" />
-              Our examiner {plantedVerb(missed)} here in {plural(missed.length, "test copy", "test copies")}. {lens.model} missed {missedWord(missed.length)}.
+              The referee AI {plantedVerb(missed)} here in {plural(missed.length, "test copy", "test copies")}. {lens.model} missed {missedWord(missed.length)}.
             </span>
             <button
               type="button"
@@ -430,12 +455,12 @@ function QuietBlock({ block, quiet, startOpen }: { block: Block; quiet: string; 
         className={`group flex min-h-10 w-full items-center gap-2.5 px-4 py-2 text-left text-[13.5px] ${open ? "border-b border-hair" : ""}`}
       >
         {open ? (
-          <span className="font-medium">{hunk.start ? `Lines ${lineRange(hunk.start, hunk.end)}` : "Removed lines"}</span>
+          <span className="font-medium">{hunkLabel(hunk)}</span>
         ) : (
           <>
             <ChevronsUpDown size={15} className="shrink-0 text-faint" />
             <span className="text-soft">
-              {hunk.start ? `Lines ${lineRange(hunk.start, hunk.end)}` : "Removed lines"} changed{quiet ? `, ${quiet}` : ""}
+              {hunkLabel(hunk)} changed{quiet ? `, ${quiet}` : ""}
             </span>
           </>
         )}
