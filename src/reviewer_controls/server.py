@@ -1,8 +1,10 @@
-"""Web backend: serves saved runs to the page, records sign-offs and spot-checks the signer.
+"""Web backend: serves saved runs to the page, judges sign-offs and spot-checks the signer.
 
     .venv/bin/uvicorn reviewer_controls.server:app --app-dir src --port 8000
 
 It reads result files only. It never loads the keys file and never calls a model.
+It keeps nothing about the people signing: each browser stores its own sign-offs and
+spot-check record, so many people can use one demo at the same time.
 """
 
 from __future__ import annotations
@@ -59,7 +61,7 @@ def changes() -> list:
 @app.get("/api/pulls")
 def pulls() -> dict:
     listed = list_pulls(PULLS_FILE, RESULTS_DIR)
-    listed["spot_checks"] = vigilance.record()
+    listed["spot_checks"] = {"enabled": vigilance.enabled, "rate": vigilance.rate}
     return listed
 
 
@@ -73,9 +75,12 @@ def exam(change_id: str) -> dict:
 
 
 @app.get("/api/review/{change_id}")
-def review(change_id: str) -> dict:
-    """The change to show for sign-off, with a session token."""
-    result = vigilance.open(change_id)
+def review(change_id: str, visitor: str = "", checked: bool = False) -> dict:
+    """The change to show for sign-off, with a session token.
+
+    `visitor` is the browser's random id; `checked` says that browser already signed this pull request's spot-check.
+    """
+    result = vigilance.open(change_id, visitor, checked)
     if result is None:
         raise HTTPException(status_code=404, detail="no saved run for {}".format(change_id))
     return result
@@ -90,13 +95,6 @@ def signoff(body: SignOff) -> dict:
         raise HTTPException(status_code=409, detail=str(error.args[0]))
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error))
-
-
-@app.post("/api/spot-checks/reset")
-def reset_spot_checks() -> dict:
-    """For demonstrations: let the next opening of each pull request be spot-checked again."""
-    vigilance.reset()
-    return vigilance.record()
 
 
 # The built page, when it exists. While developing, Vite serves the page and proxies /api here.

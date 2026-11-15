@@ -3,7 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from reviewer_controls.exam import build_exam, signoffs_for
+from reviewer_controls import vigilance as vigilance_module
+from reviewer_controls.exam import build_exam
 from reviewer_controls.vigilance import Vigilance, pick_spot_check
 
 REAL = (
@@ -77,18 +78,27 @@ class VigilanceTests(unittest.TestCase):
         self.assertEqual(self.shown(again), ["if (value < max)"])         # a reload does not use it up
         self.assertNotEqual(first["session"], again["session"])
         vigilance.sign(again["session"], "big", "Ada", "reject")
-        self.assertEqual(self.shown(vigilance.open("c1")), ["if (value > max)"])   # once signed, the real change
+        self.assertEqual(self.shown(vigilance.open("c1")), ["if (value < max)"])   # the server remembers nothing
+        self.assertEqual(self.shown(vigilance.open("c1", checked=True)), ["if (value > max)"])   # the browser says it was checked
 
     def test_accepting_a_planted_copy_is_recorded_as_a_miss_and_not_as_an_approval(self):
         vigilance = Vigilance(self.results)
         result = vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "accept")
-        self.assertEqual((result["spot_check"], result["caught"], result["plant"]["id"]), (True, False, "p02"))
-        self.assertEqual(signoffs_for(self.results, "c1"), [])
-        self.assertEqual((result["record"]["checked"], result["record"]["caught"]), (1, 0))
+        self.assertEqual((result["spot_check"], result["change_id"], result["caught"], result["plant"]["id"]), (True, "c1", False, "p02"))
+        self.assertNotIn("signoff", result)
 
-        real = vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "accept")
+        real = vigilance.sign(vigilance.open("c1", checked=True)["session"], "big", "Ada", "accept")
         self.assertFalse(real["spot_check"])
-        self.assertEqual([(e["name"], e["decision"]) for e in signoffs_for(self.results, "c1")], [("Ada", "accept")])
+        self.assertEqual((real["signoff"]["change_id"], real["signoff"]["name"], real["signoff"]["decision"]), ("c1", "Ada", "accept"))
+
+    def test_nothing_about_people_is_written(self):
+        before = sorted(path.name for path in self.results.iterdir())
+        vigilance = Vigilance(self.results)
+        vigilance.sign(vigilance.open("c1", "browser-a")["session"], "big", "Ada", "accept")
+        vigilance.sign(vigilance.open("c1", "browser-a", checked=True)["session"], "big", "Ada", "accept")
+        self.assertEqual(sorted(path.name for path in self.results.iterdir()), before)
+        # Another browser is untouched by what the first one did.
+        self.assertEqual(self.shown(vigilance.open("c1", "browser-b")), ["if (value < max)"])
 
     def test_marking_the_planted_spot_as_wrong_is_recorded(self):
         vigilance = Vigilance(self.results)
@@ -105,8 +115,8 @@ class VigilanceTests(unittest.TestCase):
     def test_spot_verdicts_are_kept_with_a_real_sign_off(self):
         vigilance = Vigilance(self.results, enabled=False)
         spots = [{"plant_id": "p02", "verdict": "right"}, {"plant_id": "p01", "verdict": "nonsense"}]
-        vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "accept", spots)
-        self.assertEqual(signoffs_for(self.results, "c1")[0]["spots"], [{"plant_id": "p02", "verdict": "right"}])
+        result = vigilance.sign(vigilance.open("c1")["session"], "big", "Ada", "accept", spots)
+        self.assertEqual(result["signoff"]["spots"], [{"plant_id": "p02", "verdict": "right"}])
 
     def test_proof_that_is_only_a_test_is_flagged(self):
         data = run("big", "2026-11-14T05:00:00Z", self.plants, set())
@@ -119,7 +129,6 @@ class VigilanceTests(unittest.TestCase):
         vigilance = Vigilance(self.results)
         result = vigilance.sign(vigilance.open("c1")["session"], "big", "Grace", "full_read")
         self.assertTrue(result["caught"])
-        self.assertEqual(vigilance.record()["caught"], 1)
 
     def test_a_session_signs_once_and_an_empty_name_decides_nothing(self):
         vigilance = Vigilance(self.results)
@@ -129,24 +138,36 @@ class VigilanceTests(unittest.TestCase):
         vigilance.sign(token, "big", "Ada", "reject")
         with self.assertRaises(KeyError):
             vigilance.sign(token, "big", "Ada", "reject")
+        off = Vigilance(self.results, enabled=False)
+        real = off.open("c1")["session"]
+        with self.assertRaises(ValueError):
+            off.sign(real, "big", "Ada", "maybe")
+        self.assertEqual(off.sign(real, "big", "Ada", "reject")["signoff"]["decision"], "reject")   # still open after a refusal
 
-    def test_spot_checks_can_be_switched_off_and_reset(self):
+    def test_spot_checks_can_be_switched_off(self):
         off = Vigilance(self.results, enabled=False)
         self.assertEqual(self.shown(off.open("c1")), ["if (value > max)"])
-        on = Vigilance(self.results)
-        on.sign(on.open("c1")["session"], "big", "Ada", "accept")
-        self.assertEqual(self.shown(on.open("c1")), ["if (value > max)"])
-        on.reset()
-        self.assertEqual(self.shown(on.open("c1")), ["if (value < max)"])
 
     def test_only_a_share_of_pull_requests_is_spot_checked_and_the_choice_sticks(self):
-        draws = iter([0.9, 0.1])
-        vigilance = Vigilance(self.results, rate=0.5, rng=lambda: next(draws))
-        self.assertEqual(self.shown(vigilance.open("c1")), ["if (value > max)"])   # 0.9: not picked
-        self.assertEqual(self.shown(vigilance.open("c1")), ["if (value > max)"])   # and it stays that way
-        vigilance.reset()
-        self.assertEqual(self.shown(vigilance.open("c1")), ["if (value < max)"])   # 0.1: picked
-        self.assertEqual(vigilance.record()["rate"], 0.5)
+        vigilance = Vigilance(self.results, rate=0.5, secret=b"fixed")
+        picked = [self.shown(vigilance.open("c1", "browser-{}".format(n)))[0] == "if (value < max)" for n in range(400)]
+        self.assertTrue(120 < sum(picked) < 280)                                  # about half of the browsers
+        for n in range(20):                                                       # and a reload never changes it
+            first = self.shown(vigilance.open("c1", "browser-{}".format(n)))
+            self.assertEqual(self.shown(vigilance.open("c1", "browser-{}".format(n))), first)
+        never = Vigilance(self.results, rate=0)
+        self.assertEqual(self.shown(never.open("c1", "anyone")), ["if (value > max)"])
+
+    def test_old_and_surplus_sessions_are_dropped(self):
+        saved = vigilance_module.MAX_SESSIONS
+        vigilance_module.MAX_SESSIONS = 2
+        self.addCleanup(setattr, vigilance_module, "MAX_SESSIONS", saved)
+        vigilance = Vigilance(self.results, enabled=False)
+        oldest, middle, newest = (vigilance.open("c1")["session"] for _ in range(3))
+        with self.assertRaises(KeyError):
+            vigilance.sign(oldest, "big", "Ada", "accept")
+        vigilance.sign(newest, "big", "Ada", "accept")
+        vigilance.sign(middle, "big", "Ada", "accept")
 
     def test_points_only_count_breaks_inside_the_lines_the_reviewer_cited(self):
         data = run("big", "2026-11-14T04:00:00Z", self.plants, set())

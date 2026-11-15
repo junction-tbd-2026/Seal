@@ -2,12 +2,12 @@ import { motion } from "motion/react";
 import { useEffect, useRef } from "react";
 import { DiffView } from "./DiffView";
 import { fileName } from "./lib";
-import type { SignResult } from "./types";
+import type { SignResult, SpotRecord } from "./types";
 
 type Reveal = Extract<SignResult, { spot_check: true }>;
 
 /** Shown after someone signs a spot-check copy: what was planted, and whether they caught it. */
-export function SpotCheckReveal({ result, name, onContinue }: { result: Reveal; name: string; onContinue: () => void }) {
+export function SpotCheckReveal({ result, name, record, onContinue }: { result: Reveal; name: string; record: SpotRecord; onContinue: () => void }) {
   const button = useRef<HTMLButtonElement>(null);
   useEffect(() => button.current?.focus(), []);
 
@@ -62,8 +62,8 @@ export function SpotCheckReveal({ result, name, onContinue }: { result: Reveal; 
           </div>
 
           <p className="rounded-lg bg-canvas px-3 py-2.5 text-[13.5px] leading-snug">
-            <strong className="font-semibold">Nothing was approved.</strong> The real change comes next, and only a sign-off on the real change counts. So far people
-            have caught {result.record.caught} of {result.record.checked} spot-checks.
+            <strong className="font-semibold">Nothing was approved.</strong> The real change comes next, and only a sign-off on the real change counts. In this browser
+            you have caught {record.caught} of {record.checked} spot-checks.
           </p>
 
           <button ref={button} type="button" onClick={onContinue} className="btn btn-dark h-10 px-4 text-[14px]">

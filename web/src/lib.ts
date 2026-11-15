@@ -1,4 +1,4 @@
-import type { ChangeSummary, Exam, PlantKind, PullList, Result, SignResult, SpotVerdict } from "./types";
+import type { ChangeSummary, Exam, PlantKind, Result, ServerPullList, SignResult, SpotVerdict } from "./types";
 
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -8,10 +8,14 @@ async function getJson<T>(url: string): Promise<T> {
 
 export const fetchChanges = () => getJson<ChangeSummary[]>("/api/changes");
 
-export const fetchPulls = () => getJson<PullList>("/api/pulls");
+export const fetchPulls = () => getJson<ServerPullList>("/api/pulls");
 
-/** The change to show for sign-off. It may be a spot-check copy; the page cannot tell and must not try to. */
-export const fetchReview = (changeId: string) => getJson<Exam>(`/api/review/${encodeURIComponent(changeId)}`);
+/**
+ * The change to show for sign-off. It may be a spot-check copy; the page cannot tell and must not try to.
+ * `visitor` is this browser's random id, `checked` whether this browser already signed the spot-check here.
+ */
+export const fetchReview = (changeId: string, visitor: string, checked: boolean) =>
+  getJson<Exam>(`/api/review/${encodeURIComponent(changeId)}?${new URLSearchParams({ visitor, checked: String(checked) })}`);
 
 export async function postSignOff(body: {
   session: string;

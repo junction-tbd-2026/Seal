@@ -2,10 +2,11 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, BotIcon, CheckIcon, ChevronDown, GitHubMark, PanelIcon, PullIcon, XIcon } from "./icons";
 import { fetchPulls, fetchReview, postSignOff, prettyModel } from "./lib";
+import { addSignoff, addSpotCheck, signoffsFor, spotChecked, visitorId, withLocal } from "./local";
 import { clearSaved, codeFingerprint, storageKey } from "./progress";
 import { Account, Landing, PullGroups, RepoLink, canOpen, stageOf } from "./Pulls";
 import { SpotCheckReveal } from "./SpotCheck";
-import type { Exam, PullList, SignOff, SignResult, SpotVerdict } from "./types";
+import type { Exam, PullList, SignOff, SignResult, SpotRecord, SpotVerdict } from "./types";
 import { Workspace } from "./Workspace";
 
 /** A button that opens a small menu under itself. Closes on a click outside, on Escape, and after a choice. */
@@ -103,12 +104,13 @@ export default function App() {
   // Saved checks live in the browser, not in state: this redraws the list when they change.
   const [, setSavedTick] = useState(0);
   const onSaved = useCallback(() => setSavedTick((tick) => tick + 1), []);
-  const [reveal, setReveal] = useState<{ result: Extract<SignResult, { spot_check: true }>; name: string } | null>(null);
+  const [reveal, setReveal] = useState<{ result: Extract<SignResult, { spot_check: true }>; name: string; record: SpotRecord } | null>(null);
 
   const loadPulls = useCallback(
     () =>
       fetchPulls()
-        .then((list) => setPulls(list))
+        // Sign-offs live in this browser, not on the server: lay them over the list.
+        .then((list) => setPulls(withLocal(list)))
         .catch((problem: Error) => setError(problem.message)),
     [],
   );
@@ -152,10 +154,10 @@ export default function App() {
 
   const loadReview = useCallback((changeId: string, keepView: boolean) => {
     setLoadingExam(true);
-    return fetchReview(changeId)
+    return fetchReview(changeId, visitorId(), spotChecked(changeId))
       .then((data) => {
         setExam(data);
-        setSignoffs(data.signoffs);
+        setSignoffs(signoffsFor(changeId));
         if (!keepView) setReviewerName(data.reviewers[0]?.name ?? null);
       })
       .catch((problem: Error) => setError(problem.message))
@@ -179,12 +181,15 @@ export default function App() {
     if (!exam?.session || !reviewer) throw new Error("This review session has ended. Reload the pull request.");
     const result = await postSignOff({ session: exam.session, reviewer: reviewer.name, name, decision, spots });
     if (result.spot_check) {
-      setReveal({ result, name: name.trim() });
+      const entry = { change_id: result.change_id, caught: result.caught, spotted: result.spotted, decided_at: result.decided_at };
+      const record = addSpotCheck(entry, pulls?.spot_checks ?? { enabled: true });
+      setReveal({ result, name: name.trim(), record });
       void loadPulls();
       return;
     }
     // Signed is final: the audit's checks are done with, and the pull request closes.
     exam.reviewers.forEach((item) => clearSaved(storageKey(exam.change.id, item.name)));
+    addSignoff(result.signoff);
     setSignoffs((current) => [...current, result.signoff]);
     // Noted before the list reloads: the reload alone already leads back to the list.
     setJustSigned(pull?.number ?? null);
@@ -248,7 +253,7 @@ export default function App() {
         <main className="min-h-0 flex-1">
           <Landing pulls={pulls} justSigned={justSigned} onOpen={(number) => go(number)} />
         </main>
-        {reveal && <SpotCheckReveal result={reveal.result} name={reveal.name} onContinue={continueAfterReveal} />}
+        {reveal && <SpotCheckReveal result={reveal.result} name={reveal.name} record={reveal.record} onContinue={continueAfterReveal} />}
       </div>
     );
   }
@@ -445,7 +450,7 @@ export default function App() {
         <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-hair bg-panel shadow-[var(--shadow-panel)]">{panel}</main>
       </div>
 
-      {reveal && <SpotCheckReveal result={reveal.result} name={reveal.name} onContinue={continueAfterReveal} />}
+      {reveal && <SpotCheckReveal result={reveal.result} name={reveal.name} record={reveal.record} onContinue={continueAfterReveal} />}
     </div>
   );
 }

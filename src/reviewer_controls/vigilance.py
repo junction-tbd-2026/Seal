@@ -8,22 +8,29 @@ the spot was not checked. Either way the real change is shown next, and only a s
 on the real change is recorded as an approval.
 
 This is meant to run as an announced policy. The page says sign-offs are spot-checked.
+
+The server keeps nothing about people. Each browser keeps its own sign-offs and spot-check
+record, and says with each request who it is (a random id it made up) and whether it has
+already been spot-checked on that pull request. Many people can use one demo at once.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
-import random
+import os
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Dict, Optional
 
 from .diffs import same_file
-from .exam import build_exam, clean_spots, record_signoff, structured_diff
+from .exam import build_exam, clean_spots, make_signoff, structured_diff
 
-LOG_FILE = "vigilance.jsonl"
+SESSION_SECONDS = 12 * 3600   # an opened review can be signed for this long
+MAX_SESSIONS = 50_000         # beyond this the oldest open reviews are dropped
 
 
 def planted_copy(results_dir: Path, change_id: str, plant: Dict[str, Any]) -> Optional[str]:
@@ -54,36 +61,38 @@ def pick_spot_check(exam: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 class Vigilance:
-    """Hands out review sessions and records how the human did on spot-checks."""
+    """Hands out review sessions and judges spot-checks. Records nothing about the people signing."""
 
     def __init__(
         self,
         results_dir: Path,
         enabled: bool = True,
         rate: float = 1.0,
-        rng: Callable[[], float] = random.random,
+        secret: Optional[bytes] = None,
     ) -> None:
         self.results_dir = results_dir
         self.enabled = enabled
         self.rate = max(0.0, min(1.0, rate))   # share of pull requests whose first sign-off is a spot-check
-        self._rng = rng
-        self._chosen: Dict[str, bool] = {}     # whether each change was picked; fixed once decided
-        self._sessions: Dict[str, Dict[str, Any]] = {}
-        self._checked: Set[str] = set()    # changes whose spot-check has been signed since the server started
+        self._secret = secret or os.urandom(32)
+        self._sessions: Dict[str, Dict[str, Any]] = {}   # open reviews, oldest first
 
-    def open(self, change_id: str) -> Optional[Dict[str, Any]]:
-        """The change to show for sign-off. It carries a session token and never says which kind it is."""
+    def open(self, change_id: str, visitor: str = "", checked: bool = False) -> Optional[Dict[str, Any]]:
+        """The change to show for sign-off. It carries a session token and never says which kind it is.
+
+        `visitor` is the browser's own random id, `checked` whether that browser has already
+        signed this pull request's spot-check.
+        """
         exam = build_exam(self.results_dir, change_id)
         if exam is None:
             return None
         token = uuid.uuid4().hex
         session: Dict[str, Any] = {"change_id": change_id, "plant": None, "started": time.time()}
 
-        if self.enabled and change_id not in self._checked and self._picked(change_id):
+        if self.enabled and not checked and self._picked(visitor, change_id):
             plant = pick_spot_check(exam)
             copy = planted_copy(self.results_dir, change_id, plant) if plant else None
             if plant and copy:
-                # Stays a planted copy on every opening until someone signs it, so a
+                # Stays a planted copy on every opening until this browser signs it, so a
                 # reload or a second request cannot use the spot-check up unseen.
                 exam["change"]["files"] = structured_diff(copy)
                 session["plant"] = plant
@@ -96,24 +105,43 @@ class Vigilance:
                     and other["line_end"] >= plant["line_start"]
                 } | {plant["id"]}
 
+        self._forget_old(session["started"])
         self._sessions[token] = session
         exam["session"] = token
         return exam
 
-    def _picked(self, change_id: str) -> bool:
-        """Decide once per change, so a reload cannot reveal a spot-check by making it vanish."""
-        if change_id not in self._chosen:
-            self._chosen[change_id] = self._rng() < self.rate
-        return self._chosen[change_id]
+    def _picked(self, visitor: str, change_id: str) -> bool:
+        """The same answer for one browser and one change on every opening, so a reload cannot
+        reveal a spot-check by making it vanish. It differs between browsers, and without the
+        server's secret the page cannot work it out."""
+        if self.rate >= 1:
+            return True
+        if self.rate <= 0:
+            return False
+        message = "{}\0{}".format(visitor[:100], change_id).encode()
+        digest = hmac.new(self._secret, message, hashlib.sha256).digest()
+        return int.from_bytes(digest[:8], "big") / 2 ** 64 < self.rate
+
+    def _forget_old(self, now: float) -> None:
+        """Drop reviews opened too long ago, and the oldest ones when too many are open."""
+        for token in list(self._sessions):
+            if len(self._sessions) < MAX_SESSIONS and now - self._sessions[token]["started"] < SESSION_SECONDS:
+                break
+            del self._sessions[token]
 
     def sign(self, token: str, reviewer: str, name: str, decision: str, spots: Any = None) -> Dict[str, Any]:
+        """Judge a decision. The result goes back to the browser that signed, which keeps it."""
         session = self._sessions.pop(token, None)
         if session is None:
             raise KeyError("this review session has ended; reload the pull request")
         seconds = round(time.time() - session["started"], 1)
         plant = session["plant"]
         if plant is None:
-            entry = record_signoff(self.results_dir, session["change_id"], reviewer, name, decision, spots)
+            try:
+                entry = make_signoff(session["change_id"], reviewer, name, decision, spots)
+            except ValueError:
+                self._sessions[token] = session    # nothing was decided; keep the session
+                raise
             return {"spot_check": False, "signoff": entry}
 
         name = name.strip()
@@ -124,51 +152,12 @@ class Vigilance:
         # Better than refusing the copy: did they mark the planted spot itself as wrong?
         place = session.get("place") or {plant["id"]}
         spotted = any(s["plant_id"] in place and s["verdict"] == "wrong" for s in clean_spots(spots))
-        self._checked.add(session["change_id"])
-        record = {
-            "change_id": session["change_id"],
-            "name": name[:120],
-            "plant_id": plant["id"],
-            "decision": decision,
-            "caught": caught,
-            "spotted": spotted,
-            "seconds": seconds,
-            "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-        self.results_dir.mkdir(parents=True, exist_ok=True)
-        with (self.results_dir / LOG_FILE).open("a") as handle:
-            handle.write(json.dumps(record) + "\n")
         return {
             "spot_check": True,
+            "change_id": session["change_id"],
             "caught": caught,
             "spotted": spotted,
             "seconds": seconds,
+            "decided_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "plant": {key: plant[key] for key in ("id", "kind", "description", "file", "line_start", "line_end", "patch")},
-            "record": self.record(),
         }
-
-    def record(self) -> Dict[str, Any]:
-        """How people have done on spot-checks so far."""
-        entries: List[Dict[str, Any]] = []
-        path = self.results_dir / LOG_FILE
-        if path.is_file():
-            for line in path.read_text().splitlines():
-                try:
-                    entry = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(entry, dict) and "caught" in entry:
-                    entries.append(entry)
-        return {
-            "enabled": self.enabled,
-            "rate": self.rate,
-            "checked": len(entries),
-            "caught": sum(1 for entry in entries if entry["caught"]),
-            "latest": entries[-3:],
-        }
-
-    def reset(self) -> None:
-        """Forget which changes were spot-checked, so the next opening may be a planted copy again."""
-        self._checked.clear()
-        self._chosen.clear()
-        self._sessions.clear()

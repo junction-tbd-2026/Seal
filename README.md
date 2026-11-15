@@ -98,6 +98,9 @@ A working prototype with two parts.
 - A spot-check of the person: for a share of pull requests the code first
   shown is a copy with a planted bug. Accepting it is recorded and nothing
   is approved.
+- Sign-offs and spot-check results are kept in each visitor's browser, not
+  on the server, so a whole audience can use one demo at the same time
+  without signing for each other. Clearing the site's data starts over.
 
 We run it on Tieto's four sample changes with two reviewers on identical
 planted breaks: NVIDIA Nemotron and Google Gemini 4 Hydrogen (until Saturday
@@ -324,7 +327,7 @@ What the keys file holds (names only):
 | `src/reviewer_controls/card.py` | Writes the sign-off card |
 | `src/reviewer_controls/exam.py` | Shapes saved runs into what the page shows |
 | `src/reviewer_controls/vigilance.py` | The spot-check of the person signing |
-| `src/reviewer_controls/server.py` | Web backend (FastAPI): serves saved runs, records sign-offs |
+| `src/reviewer_controls/server.py` | Web backend (FastAPI): serves saved runs, checks sign-offs (the browser keeps them) |
 | `web/` | The page (React, TypeScript, Vite, Tailwind, Motion) |
 | `requirements/` | The requirement each sample change claims to meet |
 | `pull_requests.json` | The four sample pull requests the page lists |

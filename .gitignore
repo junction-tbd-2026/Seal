@@ -23,9 +23,6 @@ work/
 # Raw prompts and model replies saved with --debug
 results/debug/
 
-# Results of spot checks on the reviewer
-results/vigilance.jsonl
-
 # Hackathon research notes (collected challenge briefs), not part of the product
 junction2026/
 

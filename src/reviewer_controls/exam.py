@@ -18,8 +18,6 @@ from .matcher import finding_hits_plant
 from .models import KIND_HARMLESS, Finding, Plant
 from .planter import is_test_file
 
-SIGNOFF_FILE = "signoffs.jsonl"
-
 
 def structured_diff(diff: str) -> List[Dict[str, Any]]:
     """A diff as rows the page can draw: line number, kind (add, del, ctx, gap) and text."""
@@ -263,12 +261,14 @@ def build_exam(results_dir: Path, change_id: str) -> Optional[Dict[str, Any]]:
             for p in newest["plants"]
         ],
         "reviewers": [_reviewer_view(run) for run in sorted(by_reviewer.values(), key=lambda r: r.get("created_at", ""))],
-        "signoffs": signoffs_for(results_dir, change_id),
     }
 
 
 def list_pulls(pulls_file: Path, results_dir: Path) -> Dict[str, Any]:
-    """The connected repository's pull requests, each with where its sign-off stands."""
+    """The connected repository's pull requests and how far their AI checks got.
+
+    Sign-offs are not here: each browser keeps its own and marks its signed pull requests itself.
+    """
     data = json.loads(pulls_file.read_text()) if pulls_file.is_file() else {"pull_requests": []}
     pulls = []
     for pull in data.get("pull_requests", []):
@@ -279,16 +279,15 @@ def list_pulls(pulls_file: Path, results_dir: Path) -> Dict[str, Any]:
             entry.update({"status": "untested", "lines_to_read": 0, "reviewers": [], "signed": None})
         else:
             primary = exam["reviewers"][0]
-            signed = exam["signoffs"][-1] if exam["signoffs"] else None
             to_read = len(primary["read_yourself"])
             entry.update(
                 {
-                    "status": "signed" if signed else "needs_you" if to_read else "clear",
+                    "status": "needs_you" if to_read else "clear",
                     "lines_to_read": to_read,
                     "reviewers": [r["name"] for r in exam["reviewers"]],
                     "caught": primary["counts"]["defects_caught"],
                     "planted_defects": primary["counts"]["defects_total"],
-                    "signed": signed,
+                    "signed": None,
                 }
             )
         pulls.append(entry)
@@ -309,21 +308,20 @@ def clean_spots(spots: Any) -> List[Dict[str, str]]:
     return cleaned
 
 
-def record_signoff(
-    results_dir: Path,
+def make_signoff(
     change_id: str,
     reviewer: str,
     name: str,
     decision: str,
     spots: Any = None,
 ) -> Dict[str, Any]:
-    """Append a named human's decision. A sign-off is never edited, only added to."""
+    """A named human's decision, checked and dated. The browser that signed keeps it; the server does not."""
     name = name.strip()
     if not name:
         raise ValueError("a sign-off needs a name")
     if decision not in ("accept", "reject", "full_read"):
         raise ValueError("decision must be accept, reject or full_read")
-    entry = {
+    return {
         "change_id": change_id,
         "reviewer": reviewer,
         "name": name[:120],
@@ -331,22 +329,3 @@ def record_signoff(
         "spots": clean_spots(spots),
         "signed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    results_dir.mkdir(parents=True, exist_ok=True)
-    with (results_dir / SIGNOFF_FILE).open("a") as handle:
-        handle.write(json.dumps(entry) + "\n")
-    return entry
-
-
-def signoffs_for(results_dir: Path, change_id: str) -> List[Dict[str, Any]]:
-    path = results_dir / SIGNOFF_FILE
-    if not path.is_file():
-        return []
-    entries = []
-    for line in path.read_text().splitlines():
-        try:
-            entry = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(entry, dict) and entry.get("change_id") == change_id:
-            entries.append(entry)
-    return entries
