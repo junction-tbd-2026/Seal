@@ -7,9 +7,8 @@ from reviewer_controls.exam import (
     build_exam,
     list_changes,
     list_pulls,
-    record_signoff,
+    make_signoff,
     requirement_title,
-    signoffs_for,
     structured_diff,
 )
 
@@ -128,21 +127,19 @@ class ExamTests(unittest.TestCase):
         self.assertEqual([(p["number"], p["status"], p["lines_to_read"]) for p in listed],
                          [(1, "needs_you", 1), (2, "untested", 0)])
         self.assertEqual(listed[0]["url"], "https://example.invalid/me/repo/pull/1")
-        record_signoff(self.results, "ju26-issue-1", "big", "Ada", "accept")
-        again = list_pulls(pulls_file, self.results)["pull_requests"][0]
-        self.assertEqual((again["status"], again["signed"]["name"]), ("signed", "Ada"))
+        self.assertIsNone(listed[0]["signed"])   # each browser marks its own sign-offs
         self.assertEqual(list_pulls(self.results / "missing.json", self.results)["pull_requests"], [])
 
-    def test_signoffs_are_appended_and_validated(self):
+    def test_signoffs_are_validated_and_nothing_is_written(self):
         with self.assertRaises(ValueError):
-            record_signoff(self.results, "c", "r", "   ", "accept")
+            make_signoff("c", "r", "   ", "accept")
         with self.assertRaises(ValueError):
-            record_signoff(self.results, "c", "r", "Ada", "maybe")
-        record_signoff(self.results, "c", "r", " Ada ", "accept")
-        record_signoff(self.results, "c", "r", "Grace", "full_read")
-        record_signoff(self.results, "other", "r", "Linus", "reject")
-        entries = signoffs_for(self.results, "c")
-        self.assertEqual([(e["name"], e["decision"]) for e in entries], [("Ada", "accept"), ("Grace", "full_read")])
+            make_signoff("c", "r", "Ada", "maybe")
+        before = sorted(path.name for path in self.results.iterdir())
+        entry = make_signoff("c", "r", " Ada ", "full_read", [{"plant_id": "p1", "verdict": "wrong"}, {"plant_id": "p2"}])
+        self.assertEqual((entry["change_id"], entry["name"], entry["decision"]), ("c", "Ada", "full_read"))
+        self.assertEqual(entry["spots"], [{"plant_id": "p1", "verdict": "wrong"}])
+        self.assertEqual(sorted(path.name for path in self.results.iterdir()), before)
 
 
 if __name__ == "__main__":

@@ -102,7 +102,6 @@ export type Exam = {
   altered_requirement: string;
   plants: Plant[];
   reviewers: Reviewer[];
-  signoffs: SignOff[];
 };
 
 export type ChangeSummary = {
@@ -133,7 +132,11 @@ export type Pull = {
   signed: SignOff | null;
 };
 
-export type SpotRecord = { enabled: boolean; rate?: number; checked: number; caught: number };
+/** Whether sign-offs are spot-checked, and how often. */
+export type SpotPolicy = { enabled: boolean; rate?: number };
+
+/** The policy, with how this browser has done on spot-checks so far. */
+export type SpotRecord = SpotPolicy & { checked: number; caught: number };
 
 export type PullList = {
   repository: string;
@@ -143,7 +146,10 @@ export type PullList = {
   spot_checks: SpotRecord;
 };
 
-/** What signing returns: either a recorded sign-off, or the reveal that the copy shown was a spot-check. */
+/** The list as the server sends it: no sign-offs, which each browser keeps itself. */
+export type ServerPullList = Omit<PullList, "spot_checks"> & { spot_checks: SpotPolicy };
+
+/** What signing returns: either the sign-off for this browser to keep, or the reveal that the copy shown was a spot-check. */
 export type SignResult =
   | { spot_check: false; signoff: SignOff }
-  | { spot_check: true; caught: boolean; spotted: boolean; seconds: number; plant: Plant; record: SpotRecord };
+  | { spot_check: true; change_id: string; caught: boolean; spotted: boolean; seconds: number; decided_at: string; plant: Plant };
