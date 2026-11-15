@@ -345,12 +345,17 @@ em {
 .s-title .lede {
   margin-top: 74px;
 }
+/* Team names and the logo row share one line: same height, both centred. */
 .team {
   position: absolute;
   left: 0;
   bottom: 0;
+  display: flex;
+  align-items: center;
+  height: 48px;
   font-size: 22px;
   font-weight: 500;
+  white-space: pre;
 }
 
 /* Partner logos: one tone, a step lighter than the background. */
@@ -360,6 +365,7 @@ em {
   bottom: 0;
   display: flex;
   align-items: center;
+  height: 48px;
   gap: 40px;
 }
 .powered span {
@@ -739,11 +745,11 @@ em {
 /* ---------- 04 Answer ---------- */
 
 .statement {
-  margin: 104px 0 0;
-  font-size: 106px;
+  margin: 122px 0 0;
+  font-size: 84px;
   font-weight: 700;
-  line-height: 1.07;
-  letter-spacing: -0.03em;
+  line-height: 1.1;
+  letter-spacing: -0.028em;
 }
 .s-answer .lede {
   margin-top: 60px;

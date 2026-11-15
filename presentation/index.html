@@ -139,15 +139,16 @@
     <div class="safe">
       <div class="kicker rise" style="--d:150">Our answer</div>
       <h2 class="statement">
-        <span class="mask" style="--d:250"><span>Every claim points at evidence.</span></span>
-        <span class="mask" style="--d:420"><span>Every approval is tested:</span></span>
-        <span class="mask" style="--d:590"><span>the AI's and the human's.</span></span>
+        <span class="mask" style="--d:250"><span>From requirements to measurable objectives</span></span>
+        <span class="mask" style="--d:420"><span>Testing humans and AI with planted mutations</span></span>
+        <span class="mask" style="--d:590"><span>Trust is measured, not assumed</span></span>
       </h2>
-      <p class="lede rise" style="--d:1050">We do not ask the human to trust the reviewer.<br>We test it on the exact change in front of it.</p>
+      <p class="lede rise" style="--d:1050">An untested approval is a rubber stamp.</p>
     </div>
-    <aside class="notes" data-time="0:10">
-      So we do not ask the human to trust the reviewer.
-      Every claim points at evidence, and every approval is tested: the AI's and the human's.
+    <aside class="notes" data-time="0:15">
+      Our answer in three lines. We turn the requirement into objectives that can be checked one by one.
+      We test both the AI reviewer and the human who signs, by planting mutations: small changes that alter what the code does.
+      So trust is measured, not assumed. An approval nobody tested is a rubber stamp.
     </aside>
   </section>
 
@@ -166,7 +167,7 @@
           </div>
           <div class="num">01</div>
           <h3>The reviewer cites its proof</h3>
-          <p>For each point of the requirement it must cite the lines that show it. No lines, no “met”.</p>
+          <p>Uncited claims are guesses.</p>
         </article>
 
         <article class="col c2">
@@ -177,7 +178,7 @@
           </div>
           <div class="num">02</div>
           <h3>We break exactly those lines</h3>
-          <p>A second model plants one break per copy of the change: bugs, omissions and harmless rewrites.</p>
+          <p>A different model plants one break per change.</p>
         </article>
 
         <article class="col c3">
@@ -187,18 +188,18 @@
             <figure class="ok"><div class="doc mini"><i></i><i></i><i class="x soft"></i><i></i><i></i></div><span class="badge"><svg><use href="#i-check"/></svg></span><figcaption>left alone</figcaption></figure>
           </div>
           <div class="num">03</div>
-          <h3>It reviews every copy, blind</h3>
-          <p>Fresh session, normal prompt. Its “met” counts only where it noticed the break.</p>
+          <h3>The AI reviewer should notice</h3>
+          <p>Assess the understanding of the model.</p>
         </article>
       </div>
 
-      <p class="outcome frag" data-step="3"><svg><use href="#i-arrow"/></svg>The result is not a score. It is <em>the list of lines a human must read.</em></p>
+      <p class="outcome frag" data-step="3"><svg><use href="#i-arrow"/></svg>The result is not a score. It is <em>the list of lines a human must verify.</em></p>
     </div>
     <aside class="notes" data-time="0:30">
-      Three steps. Cite: for every point of the requirement, the reviewer must cite the lines that prove it.
-      [click] Break: a second model breaks those exact lines, one break per copy. Bugs, omissions, and harmless rewrites to catch false alarms.
-      [click] Re-review: the reviewer judges every copy blind. Its "met" only counts where it noticed.
-      [click] The result is not a score. It is the list of lines a human must read.
+      Three steps. Cite: for every point of the requirement, the reviewer must cite the lines that prove it. Uncited claims are guesses.
+      [click] Break: a different model breaks those exact lines, one break per change. Bugs, omissions, and harmless rewrites to catch false alarms.
+      [click] Re-review: the reviewer judges every copy blind, and should notice the break. That tells us whether it understands the code. Its "met" only counts where it noticed.
+      [click] The result is not a score. It is the list of lines a human must verify.
     </aside>
   </section>
 
