@@ -15,6 +15,8 @@ RUN npm ci --no-fund --no-audit || { \
       grep -hv ' silly ' /root/.npm/_logs/*.log | tail -n 60; \
       exit 1; }
 COPY web/ ./
+# The build copies the pitch deck into the page, to show it before the board.
+COPY presentation/ /presentation/
 RUN npm run build
 
 FROM python:3.14-slim

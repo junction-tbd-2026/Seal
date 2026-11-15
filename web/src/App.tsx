@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, BotIcon, CheckIcon, ChevronDown, GitHubMark, PanelIcon, PullIcon, XIcon } from "./icons";
+import { ArrowLeft, BotIcon, CheckIcon, ChevronDown, ChevronLeft, GitHubMark, PanelIcon, PullIcon, XIcon } from "./icons";
 import { fetchPulls, fetchReview, postSignOff, prettyModel } from "./lib";
 import { addSignoff, addSpotCheck, signoffsFor, spotChecked, visitorId, withLocal } from "./local";
 import { clearSaved, codeFingerprint, storageKey } from "./progress";
@@ -88,7 +88,8 @@ function Brand({ onHome }: { onHome: () => void }) {
   );
 }
 
-export default function App() {
+/** `onBack` leads from the board back to the pitch deck that the page opens on. */
+export default function App({ onBack }: { onBack?: () => void }) {
   const [pulls, setPulls] = useState<PullList | null>(null);
   const [selected, setSelected] = useState<number | null>(pullInAddress);
   /** The pull request signed last, so the list can show it settling at the bottom. */
@@ -243,7 +244,20 @@ export default function App() {
     return (
       <div className="flex h-full flex-col">
         <header className="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-hair bg-panel px-3 sm:px-4">
-          <Brand onHome={() => go(null)} />
+          <div className="flex shrink-0 items-center gap-0.5">
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                title="Back to the pitch"
+                aria-label="Back to the pitch"
+                className="group/out -ml-1 grid h-8 w-7 place-items-center rounded-lg text-soft hover:bg-subtle hover:text-ink"
+              >
+                <ChevronLeft size={18} className="transition-transform duration-200 group-hover/out:-translate-x-0.5 motion-reduce:transition-none" />
+              </button>
+            )}
+            <Brand onHome={() => go(null)} />
+          </div>
           <div className="flex min-w-0 items-center gap-4">
             <RepoLink pulls={pulls} />
             <span className="h-5 w-px shrink-0 bg-line" aria-hidden="true" />
