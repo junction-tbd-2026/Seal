@@ -193,6 +193,12 @@ npm --prefix web run dev
 
 Open http://localhost:5173.
 
+The page opens on the pitch deck from `presentation/`, shown unchanged, with a
+bar over it: the slides run through once by themselves, scrolling or the arrow
+keys turn them by hand, and "Log in" plays a demo sign-in and opens the board.
+The arrow next to the seal on the board leads back to the deck, and so does a
+reload.
+
 `SPOT_CHECK_RATE=1` makes the first sign-off on every pull request a
 spot-check, which is what you want for a demo. The default is 0.5.
 

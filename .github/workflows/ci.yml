@@ -58,6 +58,9 @@ jobs:
           curl --silent --fail http://127.0.0.1:8080/api/health
           curl --silent --fail http://127.0.0.1:8080/api/pulls | grep --quiet '"change_id"'
           curl --silent --fail http://127.0.0.1:8080/ | grep --quiet 'id="root"'
+          # The pitch deck that the page shows first, and one of the files it loads.
+          curl --silent --fail http://127.0.0.1:8080/deck/ | grep --quiet 'id="stage"'
+          curl --silent --fail --output /dev/null http://127.0.0.1:8080/deck/deck.js
           # The server appends sign-offs to results/, so its user must be able to write there.
           docker exec seal test -w results
       - name: Show the server log
